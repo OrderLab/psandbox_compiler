@@ -27,84 +27,107 @@
 using namespace llvm;
 
 bool pSandboxAnalysisPass::runOnModule(Module &M) {
-  Function *startFun = getFunctionWithName(functions[0].start_fun, M);
+//  Function *startFun = getFunctionWithName(syscall_functions[0].start_fun, M);
+errs() << "the start is " << syscall_functions[0].start_fun <<"\n";
 
-  CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+  for (Module::iterator function = M.begin(), moduleEnd = M.end(); function != moduleEnd; function++) {
+    for (Function::iterator block = function->begin(), functionEnd = function->end();block != functionEnd; ++block) {
+      for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
+      instruction != blockEnd; instruction++) {
+        Instruction *inst = dyn_cast<Instruction>(instruction);
+        CallInst *callInst;
+        Function *calledFunction;
 
-  callerGraph[startFun];
-  for (CallGraph::iterator node = CG.begin(); node != CG.end(); node++) {
-    Function* nodeFunction = const_cast<Function *> (node->first);
-    if (!nodeFunction) {
-      continue;
-    }
+        if (!isa<CallInst>(instruction))
+          continue;
 
-    for (CallGraphNode::iterator callee_it = node->second->begin(); callee_it != node->second->end(); callee_it++) {
-      if (!callee_it->second->getFunction())
-        continue;
+        callInst = dyn_cast<CallInst>(instruction);
+        calledFunction = callInst->getCalledFunction();
+        if (!calledFunction)
+          continue;
 
-      // create caller graph
-      if (demangleName(startFun->getName()) == demangleName(callee_it->second->getFunction()->getName())) {
-        std::vector<CallerRecord> &callers = callerGraph[startFun];
-        std::pair<Instruction *, Function *> record;
-
-        record.first = dyn_cast<Instruction>(callee_it->first);
-        record.second = nodeFunction;
-        callers.emplace_back(record);
+        if (calledFunction->getName() == syscall_functions[0].start_fun) {
+          errs() << "the caller is " << function->getName() << "\n";
+        }
       }
     }
   }
+//  CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
-    for (auto callers : callerGraph) {
-      for(auto record: callers.second) {
-
-        int flag = 0;
-        Function* f = record.first->getParent()->getParent();
-        for (Function::iterator BI = f->begin(), BE = f->end(); BI != BE; ++BI) {
-          for (BasicBlock::iterator I = BI->begin(), E = BI->end(); I != E; I++) {
-            CallInst *callInst;
-            Function *calledFunction;
-            if (!isa<CallInst>(I))
-              continue;
-
-            callInst = dyn_cast<CallInst>(I);
-            calledFunction = callInst->getCalledFunction();
-            if (!calledFunction)
-              continue;
-            if (demangleName(calledFunction->getName()) == functions[0].end_fun) {
-              flag = 1;
-              if (checkUsage(record.first,callInst)) {
-                psandboxGraph[startFun].emplace_back(record);
-                goto loop_end;
-              }
-            }
-          }
-        }
-        loop_end:
-        if(!flag) {
-          psandboxGraph[startFun].emplace_back(record);
-        }
-      }
-    }
-
-    errs() << "size: " << psandboxGraph.size() << "\n";
-    for (auto callers : psandboxGraph) {
-      errs() << "the key function: "<< callers.first->getName() << "\n";
-      errs() << "size " << callers.second.size() << "\n";
-//      for(auto record: callers.second) {
-//        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
+//  callerGraph[startFun];
+//  for (CallGraph::iterator node = CG.begin(); node != CG.end(); node++) {
+//    Function* nodeFunction = const_cast<Function *> (node->first);
+//    if (!nodeFunction) {
+//      continue;
+//    }
+//
+//    for (CallGraphNode::iterator callee_it = node->second->begin(); callee_it != node->second->end(); callee_it++) {
+//      if (!callee_it->second->getFunction())
+//        continue;
+//
+//      // create caller graph
+//      if (demangleName(startFun->getName()) == demangleName(callee_it->second->getFunction()->getName())) {
+//        std::vector<CallerRecord> &callers = callerGraph[startFun];
+//        std::pair<Instruction *, Function *> record;
+//
+//        record.first = dyn_cast<Instruction>(callee_it->first);
+//        record.second = nodeFunction;
+//        callers.emplace_back(record);
 //      }
-      errs() << "---------------------\n";
-    }
+//    }
+//  }
 
-    errs() << "callerGraph size: " << callerGraph.size() << "\n";
-    for (auto callers : callerGraph) {
-      errs() << "callerGraph the key function: "<< callers.first->getName() << "\n";
-      errs() << "callerGraph size " << callers.second.size() << "\n";
-      //      for(auto record: callers.second) {
-      //        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
-      //      }
-      errs() << "---------------------\n";
-    }
+//    for (auto callers : callerGraph) {
+//      for(auto record: callers.second) {
+//
+//        int flag = 0;
+//        Function* f = record.first->getParent()->getParent();
+//        for (Function::iterator BI = f->begin(), BE = f->end(); BI != BE; ++BI) {
+//          for (BasicBlock::iterator I = BI->begin(), E = BI->end(); I != E; I++) {
+//            CallInst *callInst;
+//            Function *calledFunction;
+//            if (!isa<CallInst>(I))
+//              continue;
+//
+//            callInst = dyn_cast<CallInst>(I);
+//            calledFunction = callInst->getCalledFunction();
+//            if (!calledFunction)
+//              continue;
+//            if (demangleName(calledFunction->getName()) == functions[0].end_fun) {
+//              flag = 1;
+//              if (checkUsage(record.first,callInst)) {
+//                psandboxGraph[startFun].emplace_back(record);
+//                goto loop_end;
+//              }
+//            }
+//          }
+//        }
+//        loop_end:
+//        if(!flag) {
+//          psandboxGraph[startFun].emplace_back(record);
+//        }
+//      }
+//    }
+//
+//    errs() << "size: " << psandboxGraph.size() << "\n";
+//    for (auto callers : psandboxGraph) {
+//      errs() << "the key function: "<< callers.first->getName() << "\n";
+//      errs() << "size " << callers.second.size() << "\n";
+////      for(auto record: callers.second) {
+////        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
+////      }
+//      errs() << "---------------------\n";
+//    }
+//
+//    errs() << "callerGraph size: " << callerGraph.size() << "\n";
+//    for (auto callers : callerGraph) {
+//      errs() << "callerGraph the key function: "<< callers.first->getName() << "\n";
+//      errs() << "callerGraph size " << callers.second.size() << "\n";
+//      //      for(auto record: callers.second) {
+//      //        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
+//      //      }
+//      errs() << "---------------------\n";
+//    }
     return true;
 }
 

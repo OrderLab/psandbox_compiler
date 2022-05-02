@@ -17,8 +17,8 @@ typedef struct functionInfo {
    std::string end_fun;
 }FunctionInfo;
 
-static FunctionInfo functions[] = {
-    {"pfs_mutex_enter_func","pfs_mutex_exit_func"}
+static FunctionInfo syscall_functions[] = {
+    {"semop","semop"}
 };
 struct pSandboxAnalysisPass : public ModulePass {
   static char ID;
