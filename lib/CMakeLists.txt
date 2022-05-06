@@ -1,10 +1,8 @@
 
 
-add_library(HelloWorld SHARED
-        HelloWorld/HelloWorld.cpp
-        )
 
-add_library(pSandboxAnalysis SHARED
+add_library(pSandboxAnalysis MODULE
+        ../include/CallGraph.h
         pSandboxAnalysis/pSandboxAnalysisPass.cpp
         ../include/pSandboxAnalysisPass.h
         )

@@ -6,6 +6,7 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Analysis/CallGraph.h"
+#include <CallGraph.h>
 
 
 using namespace llvm;
@@ -18,8 +19,10 @@ typedef struct functionInfo {
 }FunctionInfo;
 
 static FunctionInfo syscall_functions[] = {
-    {"semop","semop"}
+    {"PGSemaphoreLock","semop"}
 };
+
+
 struct pSandboxAnalysisPass : public ModulePass {
   static char ID;
   typedef std::pair<Instruction*, Function*> CallerRecord;
@@ -27,13 +30,18 @@ struct pSandboxAnalysisPass : public ModulePass {
   void getAnalysisUsage(AnalysisUsage &Info) const override;
   Function *getFunctionWithName(std::string name, Module &M);
   std::string demangleName(std::string mangledName);
-  bool checkUsage(Instruction* bi, Instruction* ei);
-  bool instrIsInaLoop(LoopInfo &loopInfo, Instruction *instr);
-  bool instrIsInLoop(Loop *loop, Instruction *instr);
+  Loop* getLoop(LoopInfo &loopInfo, Instruction *instr);
+  bool isCritical(CallGraphNode::iterator calls);
+  bool isWrapper(CallGraphNode::iterator calls);
+  Instruction* getVariable(BranchInst* bi);
+  Instruction* checkVariableUse(Instruction* inst);
+  void buildCallgraph(Module &M, GenericCallGraph<Function*> *CG);
+  void addToCallGraph(Function *F, GenericCallGraph<Function*> *CG);
  public:
   pSandboxAnalysisPass() : ModulePass(ID) {}
   std::map<Function*, std::vector<CallerRecord>> callerGraph;
-  std::map<Function*, std::vector<CallerRecord>> psandboxGraph;
+  std::map<Function*, std::vector<Function*>> wrapperMap;
+
 };
 
 #endif //STATIC_ANALYZER_INCLUDE_PSANDBOXANALYSISPASS_H_

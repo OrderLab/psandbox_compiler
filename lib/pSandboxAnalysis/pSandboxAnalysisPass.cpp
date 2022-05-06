@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <pSandboxAnalysisPass.h>
+#include "CallGraph.h"
 #include <llvm/Analysis/LoopInfo.h>
 
 #include "llvm/Demangle/Demangle.h"
@@ -24,165 +25,225 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Analysis/PostDominators.h"
 
+
 using namespace llvm;
 
 bool pSandboxAnalysisPass::runOnModule(Module &M) {
-//  Function *startFun = getFunctionWithName(syscall_functions[0].start_fun, M);
-errs() << "the start is " << syscall_functions[0].start_fun <<"\n";
+  GenericCallGraph<Function*> CG;
+  Function *startFun = getFunctionWithName(syscall_functions[0].start_fun, M);
 
-  for (Module::iterator function = M.begin(), moduleEnd = M.end(); function != moduleEnd; function++) {
-    for (Function::iterator block = function->begin(), functionEnd = function->end();block != functionEnd; ++block) {
-      for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
-      instruction != blockEnd; instruction++) {
-        Instruction *inst = dyn_cast<Instruction>(instruction);
-        CallInst *callInst;
-        Function *calledFunction;
+  int count = 0;
+  callerGraph[startFun];
+  wrapperMap[startFun];
+  std::vector<Function*> &wrappers = wrapperMap[startFun];
+  wrappers.emplace_back(startFun);
+  buildCallgraph(M,&CG);
 
-        if (!isa<CallInst>(instruction))
-          continue;
+  GenericCallGraph<Function*>::FuncNode  *node = CG.createNode(startFun);
+  errs() << "the Function is " << node->getValue()->getName() << "\n";
+  auto Callers = node->getCallers();
 
-        callInst = dyn_cast<CallInst>(instruction);
-        calledFunction = callInst->getCalledFunction();
-        if (!calledFunction)
-          continue;
-
-        if (calledFunction->getName() == syscall_functions[0].start_fun) {
-          errs() << "the caller is " << function->getName() << "\n";
-        }
-      }
-    }
+  for (auto caller: Callers) {
+//    std::vector<CallerRecord> &callers = callerGraph[startFun];
+//    std::pair<Instruction *, Function *> record;
+      errs() << "the caller is " << caller->getValue()->getName() << "\n";
   }
-//  CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
-//  callerGraph[startFun];
-//  for (CallGraph::iterator node = CG.begin(); node != CG.end(); node++) {
-//    Function* nodeFunction = const_cast<Function *> (node->first);
-//    if (!nodeFunction) {
-//      continue;
-//    }
-//
-//    for (CallGraphNode::iterator callee_it = node->second->begin(); callee_it != node->second->end(); callee_it++) {
-//      if (!callee_it->second->getFunction())
-//        continue;
-//
-//      // create caller graph
-//      if (demangleName(startFun->getName()) == demangleName(callee_it->second->getFunction()->getName())) {
-//        std::vector<CallerRecord> &callers = callerGraph[startFun];
-//        std::pair<Instruction *, Function *> record;
-//
-//        record.first = dyn_cast<Instruction>(callee_it->first);
-//        record.second = nodeFunction;
-//        callers.emplace_back(record);
-//      }
-//    }
-//  }
 
-//    for (auto callers : callerGraph) {
-//      for(auto record: callers.second) {
+
+//  do {
+//      std::map<Function*, std::vector<Function*>> newWrapper;
+//      for (auto node = CG.begin(); node != CG.end(); node++) {
+//        Function* func = const_cast<Function *> (node->first);
 //
-//        int flag = 0;
-//        Function* f = record.first->getParent()->getParent();
-//        for (Function::iterator BI = f->begin(), BE = f->end(); BI != BE; ++BI) {
-//          for (BasicBlock::iterator I = BI->begin(), E = BI->end(); I != E; I++) {
-//            CallInst *callInst;
-//            Function *calledFunction;
-//            if (!isa<CallInst>(I))
-//              continue;
+//        if (!func) {
+//          continue;
+//        }
 //
-//            callInst = dyn_cast<CallInst>(I);
-//            calledFunction = callInst->getCalledFunction();
-//            if (!calledFunction)
-//              continue;
-//            if (demangleName(calledFunction->getName()) == functions[0].end_fun) {
-//              flag = 1;
-//              if (checkUsage(record.first,callInst)) {
-//                psandboxGraph[startFun].emplace_back(record);
-//                goto loop_end;
+//
+//        auto Callers = node->second.getCallers();
+//
+//        for (auto caller = Callers.begin(); caller != Callers.begin(); caller++) {
+//          if (!caller->getValue()))
+//            continue;
+
+//          if(node->first->getName() == "LWLockAcquire") {
+////            for(node->getExternalCallingNode())
+//            errs() << " called function " << calledFunction->second->getFunction()->getName() << "\n";
+//          }
+          // create caller graph
+//          for (auto maps: wrapperMap) {
+//            for (auto wrappers: maps.second) {
+//              if (demangleName(wrappers->getName()) == demangleName(calledFunction->second->getFunction()->getName())) {
+//                std::vector<CallerRecord> &callers = callerGraph[maps.first];
+//                std::pair<Instruction *, Function *> record;
+//                if (isCritical(calledFunction) ) {
+//                  record.first = dyn_cast<Instruction>(calledFunction->first);
+//                  record.second = func;
+//                  callers.emplace_back(record);
+//
+//                } else if (isWrapper(calledFunction)) {
+//                  newWrapper[startFun].emplace_back(func);
+//                  count++;
+//                  errs() << "new wrappers: " << func->getName() <<"\n";
+//                }
 //              }
 //            }
 //          }
 //        }
-//        loop_end:
-//        if(!flag) {
-//          psandboxGraph[startFun].emplace_back(record);
-//        }
 //      }
-//    }
-//
-//    errs() << "size: " << psandboxGraph.size() << "\n";
-//    for (auto callers : psandboxGraph) {
-//      errs() << "the key function: "<< callers.first->getName() << "\n";
-//      errs() << "size " << callers.second.size() << "\n";
-////      for(auto record: callers.second) {
-////        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
-////      }
-//      errs() << "---------------------\n";
-//    }
-//
+//      wrapperMap.clear();
+//      wrapperMap = newWrapper;
+//    errs() << "-----------------------------\n";
+//    } while (!count);
+
 //    errs() << "callerGraph size: " << callerGraph.size() << "\n";
 //    for (auto callers : callerGraph) {
 //      errs() << "callerGraph the key function: "<< callers.first->getName() << "\n";
 //      errs() << "callerGraph size " << callers.second.size() << "\n";
-//      //      for(auto record: callers.second) {
-//      //        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
-//      //      }
+//      for(auto record: callers.second) {
+//        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
+//      }
 //      errs() << "---------------------\n";
 //    }
     return true;
 }
 
-bool pSandboxAnalysisPass::instrIsInaLoop(LoopInfo &loopInfo, Instruction *instr) {
-  for (auto loop : loopInfo) if (instrIsInLoop(loop, instr)) return true;
 
-  return false;
+void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph<Function*> *CG) {
+  for (Function &F : M) {
+      addToCallGraph(&F,CG);
+  }
+
 }
 
-bool pSandboxAnalysisPass::instrIsInLoop(Loop *loop, Instruction *instr) {
-  if (loop->contains(instr))
-    return true;
+void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph<Function*> *CG) {
+  GenericCallGraph<Function*>::FuncNode *node = CG->createNode(F);
 
-//  else {
-//    for (auto subLoop : loop->getSubLoops()) {
-//      if (instrIsInLoop(loop, instr)) return true;
-//    }
+  // Look for calls by this function.
+  for (BasicBlock &BB : *F)
+    for (Instruction &I : BB) {
+      if (auto CS = CallSite(&I)) {
+        Function *Callee = CS.getCalledFunction();
+        if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
+          if (CallInst *call = dyn_cast<CallInst>(CS.getInstruction())) {
+            //this adds the void bitcasted functions
+            Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
+            node->addCall(CG->createNode(Callee));
+          }
+        }
+        else if (!Callee->isIntrinsic()) {
+          node->addCall(CG->createNode(Callee));
+        }
+
+      }
+    }
+}
+
+Instruction* pSandboxAnalysisPass::checkVariableUse(Instruction* inst) {
+//  std::vector<Value *> immediate_variable;
+//  std::vector<Value *> visited_variable;
+//  immediate_variable.push_back(inst);
+//  while (!immediate_variable.empty()) {
+//    Value *i = immediate_variable.back();
+//    visited_variable.push_back(i);
+//    immediate_variable.pop_back();
+//    for (User *U : inst->users()) {
+//      if (StoreInst *storeInst = dyn_cast<StoreInst>(U))
+//        if (!isa<GlobalValue>(storeInst->getValueOperand())) {
+//          if (std::find(visited_variable.begin(),visited_variable.end(),storeInst->getPointerOperand())== visited_variable.end())
+//            immediate_variable.push_back(storeInst->getValueOperand());
+//        } else {
+//          return storeInst;
+//        }
 //
-//    return false;
+//      if (LoadInst *loadInst = dyn_cast<LoadInst>(U))
+//        if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
+//          if(std::find(visited_variable.begin(),visited_variable.end(),loadInst)== visited_variable.end())
+//            immediate_variable.push_back(loadInst->getPointerOperand());
+//        } else {
+//          return loadInst;
+//        }
+//    }
 //  }
-
+  return NULL;
 }
 
-bool pSandboxAnalysisPass::checkUsage(Instruction* bi, Instruction* ei) {
-  Function* f = bi->getFunction();
-  int flag = 0;
+Instruction* pSandboxAnalysisPass::getVariable(BranchInst* bi) {
+  Value *val = bi->getCondition();
+  for (int i = 0; i < 5; i++) {
+    if (Instruction *inst = dyn_cast<Instruction>(val)) {
+      errs () << "inst " << *inst<< "\n";
+      if (isa<CmpInst>(val)) {
+        CmpInst *ci = dyn_cast<CmpInst>(inst);
+        Value *LHS = ci->getOperand(0);
+        Value *RHS = ci->getOperand(1);
+        if (!isa<Constant>(LHS)) {
+          val = LHS;
+          continue;
+        } else if (!isa<Constant>(RHS)) {
+          val = RHS;
+          continue;
+        }
+      }
+
+      if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
+        if (!isa<Constant>(storeInst->getValueOperand())) {
+          val = storeInst->getPointerOperand();
+        }
+
+      if (LoadInst *loadInst = dyn_cast<LoadInst>(inst))
+        if (!isa<Constant>(loadInst->getPointerOperand())) {
+          val = loadInst->getPointerOperand();
+        }
+
+      if (isa<AllocaInst>(inst)) {
+         errs() << "inst " << checkVariableUse(inst) << "\n";
+      }
+    }
+
+  }
+}
+
+bool pSandboxAnalysisPass::isCritical(CallGraphNode::iterator calls) {
+  Instruction *i = dyn_cast<Instruction>(calls->first);
+  Function* f = i->getFunction();
   DominatorTree DT = DominatorTree();
-  DT.recalculate(*bi->getFunction());
+  DT.recalculate(*f);
   LoopInfo *LI = new LoopInfo();
   LI->releaseMemory();
   LI->analyze(DT);
-  for (Function::iterator BI = f->begin(), BE = f->end(); BI != BE; ++BI) {
-    for (BasicBlock::iterator I = BI->begin(), E = BI->end(); I != E; I++) {
-      Instruction *inst = dyn_cast<Instruction>(I);
-      if(inst == bi)  {
-        flag = 1;
-        continue;
-      } else if (inst == ei) {
-        flag = 0;
-        continue;
-      }
-      if (!flag)
+  if (Loop* loop = getLoop(*LI, i)) {
+    for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
+      BranchInst *bi = dyn_cast<BranchInst>(inst);
+      if(!bi)
         continue;
 
-      if (isa<CallInst>(I) || isa<InvokeInst>(I))
-        return true;
-
-      if(instrIsInaLoop(*LI,inst)) {
-        return true;
-      }
-
+//      getVariable(bi);
+      return false;
     }
   }
   return false;
 }
+
+bool pSandboxAnalysisPass::isWrapper(CallGraphNode::iterator calls) {
+  Instruction *bi = dyn_cast<Instruction>(calls->first);
+  Function* f = bi->getFunction();
+  DominatorTree DT = DominatorTree();
+  DT.recalculate(*f);
+  return DT.dominates(f->getEntryBlock().getFirstNonPHI(),bi->getParent());
+}
+
+
+Loop* pSandboxAnalysisPass::getLoop(LoopInfo &loopInfo, Instruction *instr) {
+  for (auto loop : loopInfo)
+    if (loop->contains(instr))
+      return loop;
+
+  return NULL;
+}
+
+
 
   // Helper function to demangle a function name given a mangled name
   // Note: This strips out the function arguments along with the function number
@@ -213,7 +274,7 @@ Function *pSandboxAnalysisPass::getFunctionWithName(std::string name, Module &M)
     Function &F = *I;
     std::string demangled = demangleName(F.getName());
     if (demangled.rfind(name, 0) == 0)  {
-      errs() << demangled << "\n";
+//      errs() << demangled << "\n";
       return &F;
     }
   }
@@ -223,6 +284,7 @@ Function *pSandboxAnalysisPass::getFunctionWithName(std::string name, Module &M)
 void pSandboxAnalysisPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<llvm::CallGraphWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<llvm::LoopInfoWrapperPass>();
 }
 
 char pSandboxAnalysisPass::ID = 1;
