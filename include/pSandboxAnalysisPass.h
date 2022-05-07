@@ -19,7 +19,7 @@ typedef struct functionInfo {
 }FunctionInfo;
 
 static FunctionInfo targetFunctions[] = {
-    {"PGSemaphoreLock","semop"},
+    {"semop","semop"},
 //    {"pthread_mutex_lock","pthread_mutex_unlock"}
 };
 
@@ -32,13 +32,13 @@ struct pSandboxAnalysisPass : public ModulePass {
   Function *getFunctionWithName(std::string name, Module &M);
   std::string demangleName(std::string mangledName);
   Loop* getLoop(LoopInfo &loopInfo, Instruction *instr);
-  bool isCritical(CallGraphNode::iterator calls);
+  bool isCritical(FuncNode::CallRecord calls);
   bool isWrapper(FuncNode::CallRecord calls);
   Instruction* getVariable(BranchInst* bi);
   Instruction* checkVariableUse(Instruction* inst);
   void buildCallgraph(Module &M, GenericCallGraph *CG);
   void addToCallGraph(Function *F, GenericCallGraph *CG);
-  void buildWrapperMap(GenericCallGraph *CG);
+  void buildInstrumentationMap(GenericCallGraph *CG);
  public:
   pSandboxAnalysisPass() : ModulePass(ID) {}
   std::map<Function*, std::vector<usageRecord>> resourceUseMap;

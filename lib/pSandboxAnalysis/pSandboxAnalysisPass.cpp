@@ -41,7 +41,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
   }
 
   buildCallgraph(M,&CG);
-  buildWrapperMap(&CG);
+  buildInstrumentationMap(&CG);
 
   for (auto maps: functionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
@@ -97,15 +97,15 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 //    errs() << "-----------------------------\n";
 //    } while (!count);
 
-//    errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
-//    for (auto callers : resourceUseMap) {
-//      errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
-//      errs() << "resourceUseMap size " << callers.second.size() << "\n";
-//      for(auto record: callers.second) {
-//        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
-//      }
-//      errs() << "---------------------\n";
-//    }
+    errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
+    for (auto callers : resourceUseMap) {
+      errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
+      errs() << "resourceUseMap size " << callers.second.size() << "\n";
+      for(auto record: callers.second) {
+        errs() << " function " << record.second->getName()<< "\n";
+      }
+      errs() << "---------------------\n";
+    }
     return true;
 }
 
@@ -116,7 +116,7 @@ void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph *CG) {
   }
 }
 
-void pSandboxAnalysisPass::buildWrapperMap(GenericCallGraph *CG) {
+void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG) {
   std::map<Function*, std::vector<Function*>> wrapper = functionWrapperMap;
   for (int i = 0; i < DEPTH; i++) {
     std::map<Function*, std::vector<Function*>> newWrapper;
@@ -125,12 +125,18 @@ void pSandboxAnalysisPass::buildWrapperMap(GenericCallGraph *CG) {
         FuncNode *node = CG->createNode(wrappers);
         auto Callers = node->getCallers();
         for (auto caller: Callers) {
-          if (isWrapper(caller)) {
-            functionWrapperMap[maps.first].emplace_back(caller.second->getValue());
-            newWrapper[maps.first].emplace_back(caller.second->getValue());
+          std::vector<usageRecord> &usages = resourceUseMap[maps.first];
+          if (isCritical(caller)) {
+            std::pair<Instruction *, Function *> record;
+            record.first = dyn_cast<Instruction>(caller.first);
+            record.second = caller.second->getValue();
+            usages.emplace_back(record);
+          } else if (isWrapper(caller)) {
+              functionWrapperMap[maps.first].emplace_back(caller.second->getValue());
+              newWrapper[maps.first].emplace_back(caller.second->getValue());
+            }
           }
         }
-      }
     }
     wrapper.clear();
     wrapper = newWrapper;
@@ -225,8 +231,8 @@ Instruction* pSandboxAnalysisPass::getVariable(BranchInst* bi) {
   }
 }
 
-bool pSandboxAnalysisPass::isCritical(CallGraphNode::iterator calls) {
-  Instruction *i = dyn_cast<Instruction>(calls->first);
+bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
+  Instruction *i = dyn_cast<Instruction>(calls.first);
   Function* f = i->getFunction();
   DominatorTree DT = DominatorTree();
   DT.recalculate(*f);
@@ -234,14 +240,15 @@ bool pSandboxAnalysisPass::isCritical(CallGraphNode::iterator calls) {
   LI->releaseMemory();
   LI->analyze(DT);
   if (Loop* loop = getLoop(*LI, i)) {
-    for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
-      BranchInst *bi = dyn_cast<BranchInst>(inst);
-      if(!bi)
-        continue;
-
+//    for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
+//      BranchInst *bi = dyn_cast<BranchInst>(inst);
+//      if(!bi)
+//        continue;
+//
 //      getVariable(bi);
-      return false;
-    }
+//      return false;
+//    }
+    return true;
   }
   return false;
 }
