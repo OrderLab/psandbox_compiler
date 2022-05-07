@@ -9,55 +9,58 @@
 #include <vector>
 namespace llvm {
 
-  template <typename ValueT>
+class FuncNode {
+ public:
+  typedef std::pair<WeakTrackingVH, FuncNode *> CallRecord;
+ private:
+  unsigned _id;
+  unsigned _scc_id{0};
+  std::vector<CallRecord> _calls;
+  std::vector<CallRecord> _callers;
+
+  bool _contains(const FuncNode *x, const std::vector<CallRecord> &C) const {
+    return std::any_of(C.begin(), C.end(),[x](const CallRecord& s) { return s.second == x; });
+  }
+
+ public:
+  Function* value;
+
+  FuncNode(unsigned id, Function* &nd) : _id(id), value(nd){};
+
+  FuncNode(FuncNode &&) = default;
+
+  bool calls(const FuncNode *x) const { return _contains(x, _calls); }
+  bool isCalledBy(FuncNode *x) const { return _contains(x, _callers); }
+
+  unsigned getID() const { return _id; }
+  unsigned getSCCId() const { return _scc_id; }
+  void setSCCId(unsigned id) { _scc_id = id; }
+
+  bool addCall(CallSite CS, FuncNode *x) {
+    if (calls(x))
+      return false;
+    _calls.emplace_back(CS.getInstruction(),x);
+    if (!x->isCalledBy(this))
+      x->_callers.emplace_back(CS.getInstruction(),this);
+    return true;
+  }
+
+  const std::vector<CallRecord> &getCalls() const { return _calls; }
+  // alias for getCalls()
+  const std::vector<CallRecord> &successors() const { return getCalls(); }
+  const std::vector<CallRecord> &getCallers() const { return _callers; }
+
+  Function* getValue() const { return value; };
+};
+
   class GenericCallGraph {
    public:
-    class FuncNode {
-      unsigned _id;
-      unsigned _scc_id{0};
-      std::vector<FuncNode *> _calls;
-      std::vector<FuncNode *> _callers;
 
-      template <typename Cont>
-      bool _contains(const FuncNode *x, const Cont &C) const {
-        return std::any_of(C.begin(), C.end(),[x](FuncNode *s) { return s == x; });
-      }
-
-     public:
-      const ValueT value;
-
-      FuncNode(unsigned id, const ValueT &nd) : _id(id), value(nd){};
-//      FuncNode(unsigned id) : _id(id){};
-      FuncNode(FuncNode &&) = default;
-
-      bool calls(const FuncNode *x) const { return _contains(x, _calls); }
-      bool isCalledBy(FuncNode *x) const { return _contains(x, _callers); }
-
-      unsigned getID() const { return _id; }
-      unsigned getSCCId() const { return _scc_id; }
-      void setSCCId(unsigned id) { _scc_id = id; }
-
-      bool addCall(FuncNode *x) {
-        if (calls(x))
-          return false;
-        _calls.push_back(x);
-        if (!x->isCalledBy(this))
-          x->_callers.push_back(this);
-        return true;
-      }
-
-      const std::vector<FuncNode *> &getCalls() const { return _calls; }
-      // alias for getCalls()
-      const std::vector<FuncNode *> &successors() const { return getCalls(); }
-      const std::vector<FuncNode *> &getCallers() const { return _callers; }
-
-      const ValueT &getValue() const { return value; };
-    };
 
    private:
     unsigned last_id{0};
 
-    FuncNode *getOrCreate(const ValueT &v) {
+    FuncNode *getOrCreate(Function *v) {
       auto it = _mapping.find(v);
       if (it == _mapping.end()) {
         auto newIt = _mapping.emplace(v, FuncNode(++last_id, v));
@@ -66,21 +69,21 @@ namespace llvm {
       return &it->second;
     }
 
-    std::map<const ValueT, FuncNode> _mapping;
+    std::map<const Function *, FuncNode> _mapping;
 
    public:
     // just create a node for the value
     // (e.g., the entry node)
-    FuncNode *createNode(const ValueT &a) { return getOrCreate(a); }
+    FuncNode *createNode(Function *a) { return getOrCreate(a); }
 
     // a calls b
-    bool addCall(const ValueT &a, const ValueT &b) {
+    bool addCall(Function *a, Function *b, CallSite i) {
       auto A = getOrCreate(a);
       auto B = getOrCreate(b);
-      return A->addCall(B);
+      return A->addCall(i, B);
     }
 
-    const FuncNode *get(const ValueT &v) const {
+    const FuncNode *get(const Function *v) const {
       auto it = _mapping.find(v);
       if (it == _mapping.end()) {
         return nullptr;
@@ -88,7 +91,7 @@ namespace llvm {
       return &it->second;
     }
 
-    FuncNode *get(const ValueT &v) {
+    FuncNode *get(const Function *v) {
       auto it = _mapping.find(v);
       if (it == _mapping.end()) {
         return nullptr;

@@ -2,7 +2,7 @@
 // Created by yigonghu on 12/9/21.
 //
 
-#include <fstream>
+
 #include <iostream>
 #include <set>
 #include <string>
@@ -27,29 +27,29 @@
 
 
 using namespace llvm;
+#define DEPTH 2
 
 bool pSandboxAnalysisPass::runOnModule(Module &M) {
-  GenericCallGraph<Function*> CG;
-  Function *startFun = getFunctionWithName(syscall_functions[0].start_fun, M);
+  GenericCallGraph CG;
 
-  int count = 0;
-  callerGraph[startFun];
-  wrapperMap[startFun];
-  std::vector<Function*> &wrappers = wrapperMap[startFun];
-  wrappers.emplace_back(startFun);
-  buildCallgraph(M,&CG);
-
-  GenericCallGraph<Function*>::FuncNode  *node = CG.createNode(startFun);
-  errs() << "the Function is " << node->getValue()->getName() << "\n";
-  auto Callers = node->getCallers();
-
-  for (auto caller: Callers) {
-//    std::vector<CallerRecord> &callers = callerGraph[startFun];
-//    std::pair<Instruction *, Function *> record;
-      errs() << "the caller is " << caller->getValue()->getName() << "\n";
+  for (auto targetFun :targetFunctions) {
+    Function *f = getFunctionWithName(targetFun.start_fun, M);
+    resourceUseMap[f];
+    functionWrapperMap[f];
+    std::vector<Function*> &wrappers = functionWrapperMap[f];
+    wrappers.emplace_back(f);
   }
 
+  buildCallgraph(M,&CG);
+  buildWrapperMap(&CG);
 
+  for (auto maps: functionWrapperMap) {
+    FuncNode *node = CG.createNode(maps.first);
+    errs() << "the Function is " << node->getValue()->getName() << "\n";
+    for (auto wrapper: maps.second) {
+      errs() << "the wrapper is " << wrapper->getName() << "\n";
+    }
+  }
 
 //  do {
 //      std::map<Function*, std::vector<Function*>> newWrapper;
@@ -59,8 +59,8 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 //        if (!func) {
 //          continue;
 //        }
-//
-//
+
+
 //        auto Callers = node->second.getCallers();
 //
 //        for (auto caller = Callers.begin(); caller != Callers.begin(); caller++) {
@@ -72,10 +72,10 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 //            errs() << " called function " << calledFunction->second->getFunction()->getName() << "\n";
 //          }
           // create caller graph
-//          for (auto maps: wrapperMap) {
+//          for (auto maps: functionWrapperMap) {
 //            for (auto wrappers: maps.second) {
 //              if (demangleName(wrappers->getName()) == demangleName(calledFunction->second->getFunction()->getName())) {
-//                std::vector<CallerRecord> &callers = callerGraph[maps.first];
+//                std::vector<usageRecord> &callers = resourceUseMap[maps.first];
 //                std::pair<Instruction *, Function *> record;
 //                if (isCritical(calledFunction) ) {
 //                  record.first = dyn_cast<Instruction>(calledFunction->first);
@@ -83,7 +83,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 //                  callers.emplace_back(record);
 //
 //                } else if (isWrapper(calledFunction)) {
-//                  newWrapper[startFun].emplace_back(func);
+//                  newWrapper[targetFun].emplace_back(func);
 //                  count++;
 //                  errs() << "new wrappers: " << func->getName() <<"\n";
 //                }
@@ -92,15 +92,15 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 //          }
 //        }
 //      }
-//      wrapperMap.clear();
-//      wrapperMap = newWrapper;
+//      functionWrapperMap.clear();
+//      functionWrapperMap = newWrapper;
 //    errs() << "-----------------------------\n";
 //    } while (!count);
 
-//    errs() << "callerGraph size: " << callerGraph.size() << "\n";
-//    for (auto callers : callerGraph) {
-//      errs() << "callerGraph the key function: "<< callers.first->getName() << "\n";
-//      errs() << "callerGraph size " << callers.second.size() << "\n";
+//    errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
+//    for (auto callers : resourceUseMap) {
+//      errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
+//      errs() << "resourceUseMap size " << callers.second.size() << "\n";
 //      for(auto record: callers.second) {
 //        errs() << "the Inst: " << *record.first << "; function " << record.second->getName()<< "\n";
 //      }
@@ -110,15 +110,35 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 }
 
 
-void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph<Function*> *CG) {
+void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph *CG) {
   for (Function &F : M) {
       addToCallGraph(&F,CG);
   }
-
 }
 
-void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph<Function*> *CG) {
-  GenericCallGraph<Function*>::FuncNode *node = CG->createNode(F);
+void pSandboxAnalysisPass::buildWrapperMap(GenericCallGraph *CG) {
+  std::map<Function*, std::vector<Function*>> wrapper = functionWrapperMap;
+  for (int i = 0; i < DEPTH; i++) {
+    std::map<Function*, std::vector<Function*>> newWrapper;
+    for (auto maps: wrapper) {
+      for (auto wrappers: maps.second) {
+        FuncNode *node = CG->createNode(wrappers);
+        auto Callers = node->getCallers();
+        for (auto caller: Callers) {
+          if (isWrapper(caller)) {
+            functionWrapperMap[maps.first].emplace_back(caller.second->getValue());
+            newWrapper[maps.first].emplace_back(caller.second->getValue());
+          }
+        }
+      }
+    }
+    wrapper.clear();
+    wrapper = newWrapper;
+  }
+}
+
+void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
+  FuncNode *node = CG->createNode(F);
 
   // Look for calls by this function.
   for (BasicBlock &BB : *F)
@@ -129,16 +149,16 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph<Function
           if (CallInst *call = dyn_cast<CallInst>(CS.getInstruction())) {
             //this adds the void bitcasted functions
             Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
-            node->addCall(CG->createNode(Callee));
+            node->addCall(CS,CG->createNode(Callee));
           }
         }
         else if (!Callee->isIntrinsic()) {
-          node->addCall(CG->createNode(Callee));
+          node->addCall(CS,CG->createNode(Callee));
         }
 
       }
     }
-}
+  }
 
 Instruction* pSandboxAnalysisPass::checkVariableUse(Instruction* inst) {
 //  std::vector<Value *> immediate_variable;
@@ -226,8 +246,9 @@ bool pSandboxAnalysisPass::isCritical(CallGraphNode::iterator calls) {
   return false;
 }
 
-bool pSandboxAnalysisPass::isWrapper(CallGraphNode::iterator calls) {
-  Instruction *bi = dyn_cast<Instruction>(calls->first);
+
+  bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls) {
+  Instruction *bi = dyn_cast<Instruction>(calls.first);
   Function* f = bi->getFunction();
   DominatorTree DT = DominatorTree();
   DT.recalculate(*f);
