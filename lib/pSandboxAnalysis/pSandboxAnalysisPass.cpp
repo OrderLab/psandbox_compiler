@@ -285,7 +285,6 @@ bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
         variables.push_back(ai);
       }
     }
->>>>>>> 5b0a11014def23ff1645ad78c8c0b35d1669024a
   }
   return false;
 }
