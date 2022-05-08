@@ -44,12 +44,12 @@ struct pSandboxAnalysisPass : public ModulePass {
   bool isWrapper(FuncNode::CallRecord calls);
   bool isWrapper(FuncNode::CallRecord calls,FuncInfo funcInfo);
   bool compareValue(Instruction *i, FuncInfo funcInfo);
-  Instruction* getVariable(BranchInst* bi);
-  Instruction* checkVariableUse(Instruction* inst);
+  bool isConditionGlobal(BranchInst* bi, Loop *loop);
+  bool isShared(Instruction* inst, Loop *loop);
   void buildCallgraph(Module &M, GenericCallGraph *CG);
   void addToCallGraph(Function *F, GenericCallGraph *CG);
   void buildInstrumentationMap(GenericCallGraph *CG, int depth);
-  void parseTargetFunction(Module &M,GenericCallGraph *CG);
+  void buildWrapper(Module &M, GenericCallGraph *CG);
  public:
   pSandboxAnalysisPass() : ModulePass(ID) {}
   std::map<Function*, std::vector<usageRecord>> resourceUseMap;

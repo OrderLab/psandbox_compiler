@@ -32,7 +32,7 @@ using namespace llvm;
 bool pSandboxAnalysisPass::runOnModule(Module &M) {
   GenericCallGraph CG;
   buildCallgraph(M,&CG);
-  parseTargetFunction(M,&CG);
+  buildWrapper(M, &CG);
 
   for (auto maps: functionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
@@ -56,7 +56,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
     return true;
 }
 
-void pSandboxAnalysisPass::parseTargetFunction(Module &M,GenericCallGraph *CG) {
+void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
   for (auto targetFun :targetFunctions) {
     Function *f = getFunctionWithName(targetFun.start_fun.name, M);
 
@@ -65,7 +65,7 @@ void pSandboxAnalysisPass::parseTargetFunction(Module &M,GenericCallGraph *CG) {
     FuncNode *node = CG->createNode(f);
     auto Callers = node->getCallers();
     for (auto caller: Callers) {
-      std::vector<usageRecord> &usages = resourceUseMap[f];
+//      std::vector<usageRecord> &usages = resourceUseMap[f];
 //      if (isCritical(caller)) {
 //        std::pair<Instruction *, Function *> record;
 //        record.first = dyn_cast<Instruction>(caller.first);
@@ -85,15 +85,14 @@ void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph *CG) {
   }
 }
 
-
 void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int depth) {
   std::map<Function*, std::vector<Function*>> wrapper = functionWrapperMap;
-  for (int i = 0; i < depth; i++) {
-    std::map<Function*, std::vector<Function*>> newWrapper;
+ //TODO: check the caller of the caller
     for (auto maps: wrapper) {
       for (auto wrappers: maps.second) {
         FuncNode *node = CG->createNode(wrappers);
         auto Callers = node->getCallers();
+//        errs() << "node " << node->getValue()->getName() << "\n";
         for (auto caller: Callers) {
           std::vector<usageRecord> &usages = resourceUseMap[maps.first];
           if (isCritical(caller)) {
@@ -101,15 +100,9 @@ void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int dep
             record.first = dyn_cast<Instruction>(caller.first);
             record.second = caller.second->getValue();
             usages.emplace_back(record);
-          } else if (isWrapper(caller)) {
-              functionWrapperMap[maps.first].emplace_back(caller.second->getValue());
-              newWrapper[maps.first].emplace_back(caller.second->getValue());
-            }
           }
         }
     }
-    wrapper.clear();
-    wrapper = newWrapper;
   }
 }
 
@@ -136,69 +129,30 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
     }
   }
 
-Instruction* pSandboxAnalysisPass::checkVariableUse(Instruction* inst) {
-//  std::vector<Value *> immediate_variable;
-//  std::vector<Value *> visited_variable;
-//  immediate_variable.push_back(inst);
-//  while (!immediate_variable.empty()) {
-//    Value *i = immediate_variable.back();
-//    visited_variable.push_back(i);
-//    immediate_variable.pop_back();
-//    for (User *U : i->users()) {
-//      if (StoreInst *storeInst = dyn_cast<StoreInst>(U))
-//        if (!isa<GlobalValue>(storeInst->getValueOperand())) {
-//          if (std::find(visited_variable.begin(),visited_variable.end(),storeInst->getPointerOperand())== visited_variable.end())
-//            immediate_variable.push_back(storeInst->getValueOperand());
-//        } else {
-//          return storeInst;
-//        }
-//
-//      if (LoadInst *loadInst = dyn_cast<LoadInst>(U))
-//        if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
-//          if(std::find(visited_variable.begin(),visited_variable.end(),loadInst)== visited_variable.end())
-//            immediate_variable.push_back(loadInst->getPointerOperand());
-//        } else {
-//          return loadInst;
-//        }
-//    }
-//  }
-//  return NULL;
-}
 
-Instruction* pSandboxAnalysisPass::getVariable(BranchInst* bi) {
+
+bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
   Value *val = bi->getCondition();
-  for (int i = 0; i < 5; i++) {
-    if (Instruction *inst = dyn_cast<Instruction>(val)) {
-      errs () << "inst " << *inst<< "\n";
-      if (isa<CmpInst>(val)) {
-        CmpInst *ci = dyn_cast<CmpInst>(inst);
-        Value *LHS = ci->getOperand(0);
-        Value *RHS = ci->getOperand(1);
-        if (!isa<Constant>(LHS)) {
-          val = LHS;
-          continue;
-        } else if (!isa<Constant>(RHS)) {
-          val = RHS;
-          continue;
-        }
+  if (Instruction *inst = dyn_cast<Instruction>(val)) {
+
+    if (isa<CmpInst>(val)) {
+      CmpInst *ci = dyn_cast<CmpInst>(inst);
+      Value *LHS = ci->getOperand(0);
+      Value *RHS = ci->getOperand(1);
+      if (isa<Instruction>(LHS)) {
+        auto i = dyn_cast<Instruction>(LHS);
+        if (isShared(i,loop))
+          return true;
       }
 
-      if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
-        if (!isa<Constant>(storeInst->getValueOperand())) {
-          val = storeInst->getPointerOperand();
-        }
-
-      if (LoadInst *loadInst = dyn_cast<LoadInst>(inst))
-        if (!isa<Constant>(loadInst->getPointerOperand())) {
-          val = loadInst->getPointerOperand();
-        }
-
-      if (isa<AllocaInst>(inst)) {
-//         errs() << "inst " << checkVariableUse(inst) << "\n";
+      if (isa<Instruction>(RHS)) {
+        auto i = dyn_cast<Instruction>(LHS);
+        if (isShared(i,loop))
+          return true;
       }
     }
-
   }
+  return false;
 }
 
 bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
@@ -210,22 +164,120 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
   LI->releaseMemory();
   LI->analyze(DT);
   if (Loop* loop = getLoop(*LI, i)) {
-//    for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
-//      BranchInst *bi = dyn_cast<BranchInst>(inst);
-//      if(!bi)
-//        continue;
-//
-//      getVariable(bi);
-//      return false;
-//    }
-    return true;
+    for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
+      BranchInst *bi = dyn_cast<BranchInst>(inst);
+      if(!bi)
+        continue;
+//      errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
+      return isConditionGlobal(bi,loop);
+    }
   }
   return false;
 }
 
+bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
+  std::vector<Value *> variables, visitedVariable;
+  variables.push_back(inst);
+//  errs() << "inst " << *inst << "\n";
+  if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
+    if (!isa<GlobalValue>(storeInst->getValueOperand())) {
+      variables.push_back(storeInst->getValueOperand());
+    } else {
+      return true;
+    }
+  }
+
+  if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
+    if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
+      variables.push_back(loadInst->getPointerOperand());
+    } else {
+      return true;
+    }
+  }
+
+  while (!variables.empty()) {
+    Value *v = variables.back();
+    visitedVariable.push_back(v);
+    variables.pop_back();
+
+//    errs() << "val " << *v << "\n";
+    if(auto i =  dyn_cast<Instruction>(v)) {
+      if (loop->contains(i)) {
+        if (auto *storeInst = dyn_cast<StoreInst>(i)) {
+          if (!isa<GlobalValue>(storeInst->getValueOperand())) {
+            if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+              variables.push_back(storeInst->getValueOperand());
+          } else {
+            return true;
+          }
+        }
+
+        if (auto *loadInst = dyn_cast<LoadInst>(i)) {
+         if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
+            if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
+              variables.push_back(loadInst->getPointerOperand());
+            }
+          } else {
+            return true;
+          }
+        }
+
+        if (isa<GetElementPtrInst>(i)) {
+          auto *getElementPtrInst = dyn_cast<GetElementPtrInst>(i);
+          if (!isa<GlobalValue>(getElementPtrInst->getPointerOperand())) {
+            if(std::find(visitedVariable.begin(), visitedVariable.end(), getElementPtrInst->getPointerOperand())== visitedVariable.end()) {
+              variables.push_back(getElementPtrInst->getPointerOperand());
+            }
+          } else {
+            return true;
+          }
+        }
+      }
+    }
+
+    for (User *U : v->users()) {
+//      errs() << "use " << *U << "\n";
+      if(auto i =  dyn_cast<Instruction>(U)) {
+        if (loop->contains(i)) {
+          if (auto *storeInst = dyn_cast<StoreInst>(i)) {
+            if (storeInst->getValueOperand() == v)
+              continue;
+            if (!isa<GlobalValue>(storeInst->getValueOperand())) {
+              if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+                variables.push_back(storeInst->getValueOperand());
+            } else {
+              return true;
+            }
+          }
+
+          if (auto *loadInst = dyn_cast<LoadInst>(i)) {
+            if (loadInst->getPointerOperand() == v)
+              continue;
+
+            if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
+              if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
+                variables.push_back(loadInst->getPointerOperand());
+              }
+            } else {
+              return true;
+            }
+          }
+        }
+
+        if (auto *ai = dyn_cast<AllocaInst>(i)) {
+          if (std::find(visitedVariable.begin(), visitedVariable.end(), i)== visitedVariable.end())
+              variables.push_back(ai);
+        }
+      }
+
+
+    }
+  }
+  return false;
+}
 
 bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
-  CallInst *callInst = dyn_cast<CallInst>(inst);
+  auto *callInst = dyn_cast<CallInst>(inst);
   Value *val;
   std::vector<Value *> variables,visitedVariables;
   if(!callInst)
@@ -281,7 +333,6 @@ bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
       }
 
       if (auto *ai = dyn_cast<AllocaInst>(U)) {
-        errs() << "ai " << *ai << "\n";
         variables.push_back(ai);
       }
     }
@@ -323,8 +374,6 @@ Loop* pSandboxAnalysisPass::getLoop(LoopInfo &loopInfo, Instruction *instr) {
 
   return NULL;
 }
-
-
 
   // Helper function to demangle a function name given a mangled name
   // Note: This strips out the function arguments along with the function number
