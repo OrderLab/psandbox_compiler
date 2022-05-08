@@ -33,6 +33,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
   GenericCallGraph CG;
   buildCallgraph(M,&CG);
   parseTargetFunction(M,&CG);
+
   for (auto maps: functionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
     errs() << "the Function is " << node->getValue()->getName() << "\n";
@@ -43,55 +44,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 
   buildInstrumentationMap(&CG,DEPTH);
 
-
-
-//  do {
-//      std::map<Function*, std::vector<Function*>> newWrapper;
-//      for (auto node = CG.begin(); node != CG.end(); node++) {
-//        Function* func = const_cast<Function *> (node->first);
-//
-//        if (!func) {
-//          continue;
-//        }
-
-
-//        auto Callers = node->second.getCallers();
-//
-//        for (auto caller = Callers.begin(); caller != Callers.begin(); caller++) {
-//          if (!caller->getValue()))
-//            continue;
-
-//          if(node->first->getName() == "LWLockAcquire") {
-////            for(node->getExternalCallingNode())
-//            errs() << " called function " << calledFunction->second->getFunction()->getName() << "\n";
-//          }
-          // create caller graph
-//          for (auto maps: functionWrapperMap) {
-//            for (auto wrappers: maps.second) {
-//              if (demangleName(wrappers->getName()) == demangleName(calledFunction->second->getFunction()->getName())) {
-//                std::vector<usageRecord> &callers = resourceUseMap[maps.first];
-//                std::pair<Instruction *, Function *> record;
-//                if (isCritical(calledFunction) ) {
-//                  record.first = dyn_cast<Instruction>(calledFunction->first);
-//                  record.second = func;
-//                  callers.emplace_back(record);
-//
-//                } else if (isWrapper(calledFunction)) {
-//                  newWrapper[targetFun].emplace_back(func);
-//                  count++;
-//                  errs() << "new wrappers: " << func->getName() <<"\n";
-//                }
-//              }
-//            }
-//          }
-//        }
-//      }
-//      functionWrapperMap.clear();
-//      functionWrapperMap = newWrapper;
-//    errs() << "-----------------------------\n";
-//    } while (!count);
-
-    errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
+  errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
     for (auto callers : resourceUseMap) {
       errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
       errs() << "resourceUseMap size " << callers.second.size() << "\n";

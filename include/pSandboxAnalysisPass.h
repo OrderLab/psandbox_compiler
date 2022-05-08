@@ -14,14 +14,6 @@ using namespace llvm;
 #define STATIC_ANALYZER_INCLUDE_PSANDBOXANALYSISPASS_H_
 
 typedef struct functionInfo {
-<<<<<<< HEAD
-   std::string start_fun;
-   std::string end_fun;
-}FunctionInfo;
-
-static FunctionInfo targetFunctions[] = {
-    {"semop","semop"},
-=======
   std::string name;
   int argument;
   int64_t value;
@@ -36,7 +28,6 @@ typedef struct pairInfo {
 
 static PairInfo targetFunctions[] = {
     {{"semop",1,-1,1,1},{"semop",0,0,0,1}},
->>>>>>> 5b0a11014def23ff1645ad78c8c0b35d1669024a
 //    {"pthread_mutex_lock","pthread_mutex_unlock"}
 };
 
