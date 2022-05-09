@@ -36,7 +36,9 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 
   for (auto maps: functionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
-    errs() << "the Function is " << node->getValue()->getName() << "\n";
+    if (node) {
+      errs() << "the Function is " << node->getValue()->getName() << "\n";
+    }
     for (auto wrapper: maps.second) {
       errs() << "the wrapper is " << wrapper->getName() << "\n";
     }
@@ -58,13 +60,17 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 
 void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
   for (auto targetFun :targetFunctions) {
-    Function *f = getFunctionWithName(targetFun.start_fun.name, M);
 
+    Function *f = getFunctionWithName(targetFun.start_fun.name, M);
+    if(!f)
+      continue;
     resourceUseMap[f];
     functionWrapperMap[f];
     FuncNode *node = CG->createNode(f);
     auto Callers = node->getCallers();
+    functionWrapperMap[f].emplace_back(f);
     for (auto caller: Callers) {
+//      errs() << "caller " << caller.second->getValue()->getName() << "\n";
 //      std::vector<usageRecord> &usages = resourceUseMap[f];
 //      if (isCritical(caller)) {
 //        std::pair<Instruction *, Function *> record;
@@ -92,7 +98,7 @@ void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int dep
       for (auto wrappers: maps.second) {
         FuncNode *node = CG->createNode(wrappers);
         auto Callers = node->getCallers();
-//        errs() << "node " << node->getValue()->getName() << "\n";
+        errs() << "node " << node->getValue()->getName() << "\n";
         for (auto caller: Callers) {
           std::vector<usageRecord> &usages = resourceUseMap[maps.first];
           if (isCritical(caller)) {
@@ -133,8 +139,8 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
 
 bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
   Value *val = bi->getCondition();
-  if (Instruction *inst = dyn_cast<Instruction>(val)) {
-
+//  errs() << "condi " << *val << "\n";
+  if (auto *inst = dyn_cast<Instruction>(val)) {
     if (isa<CmpInst>(val)) {
       CmpInst *ci = dyn_cast<CmpInst>(inst);
       Value *LHS = ci->getOperand(0);
@@ -150,6 +156,10 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
         if (isShared(i,loop))
           return true;
       }
+    } else if (isa<TruncInst>(val)) {
+      auto *truncInst = dyn_cast<TruncInst>(inst);
+      if (isShared(dyn_cast<Instruction>(truncInst->getOperand(0)),loop))
+        return true;
     }
   }
   return false;
@@ -164,8 +174,13 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
   LI->releaseMemory();
   LI->analyze(DT);
   if (Loop* loop = getLoop(*LI, i)) {
+    if(!loop->getExitingBlock()) {
+//      errs() << "no loop " << f->getName() << "; inst " << *i <<  "\n";
+      return false;
+    }
+    errs() << "with loop " << f->getName() << "; inst " << *i <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
-      BranchInst *bi = dyn_cast<BranchInst>(inst);
+      auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
         continue;
 //      errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
@@ -200,13 +215,16 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
     visitedVariable.push_back(v);
     variables.pop_back();
 
+    if(isa<Constant>(v))
+      continue;
 //    errs() << "val " << *v << "\n";
-    if(auto i =  dyn_cast<Instruction>(v)) {
+    if(isa<Instruction>(v)) {
+      auto i =  dyn_cast<Instruction>(v);
       if (loop->contains(i)) {
         if (auto *storeInst = dyn_cast<StoreInst>(i)) {
           if (!isa<GlobalValue>(storeInst->getValueOperand())) {
-            if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
-              variables.push_back(storeInst->getValueOperand());
+              if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+                variables.push_back(storeInst->getValueOperand());
           } else {
             return true;
           }
@@ -214,9 +232,9 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 
         if (auto *loadInst = dyn_cast<LoadInst>(i)) {
          if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
-            if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
-              variables.push_back(loadInst->getPointerOperand());
-            }
+             if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
+               variables.push_back(loadInst->getPointerOperand());
+             }
           } else {
             return true;
           }
@@ -237,11 +255,17 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 
     for (User *U : v->users()) {
 //      errs() << "use " << *U << "\n";
-      if(auto i =  dyn_cast<Instruction>(U)) {
+      if(isa<Instruction>(U)) {
+        auto i =  dyn_cast<Instruction>(U);
         if (loop->contains(i)) {
           if (auto *storeInst = dyn_cast<StoreInst>(i)) {
             if (storeInst->getValueOperand() == v)
               continue;
+
+            if(isa<ConstantInt>(storeInst->getValueOperand())) {
+              return true;
+            }
+
             if (!isa<GlobalValue>(storeInst->getValueOperand())) {
               if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
                 variables.push_back(storeInst->getValueOperand());
@@ -403,7 +427,7 @@ Function *pSandboxAnalysisPass::getFunctionWithName(std::string name, Module &M)
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I) {
     Function &F = *I;
     std::string demangled = demangleName(F.getName());
-    if (demangled.rfind(name, 0) == 0)  {
+    if (demangled == name)  {
 //      errs() << demangled << "\n";
       return &F;
     }
