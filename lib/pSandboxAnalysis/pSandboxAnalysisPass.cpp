@@ -45,13 +45,19 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
   }
 
   buildInstrumentationMap(&CG,DEPTH);
-
   errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
     for (auto callers : resourceUseMap) {
       errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
       errs() << "resourceUseMap size " << callers.second.size() << "\n";
       for(auto record: callers.second) {
-        errs() << " function " << record.second->getName()<< "\n";
+        if(record.second->getName() == "ProcSleep") {
+          errs() << " function " << record.second->getName() << "; point 7" <<"\n";
+        } else if (record.second->getName() == "LWLockAcquire") {
+          errs() << " function " << record.second->getName()<< "; point 4" << "\n";
+        } else {
+          errs() << " function " << record.second->getName()<< "\n";
+        }
+
       }
       errs() << "---------------------\n";
     }
@@ -98,7 +104,7 @@ void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int dep
       for (auto wrappers: maps.second) {
         FuncNode *node = CG->createNode(wrappers);
         auto Callers = node->getCallers();
-        errs() << "node " << node->getValue()->getName() << "\n";
+//        errs() << "node " << node->getValue()->getName() << "\n";
         for (auto caller: Callers) {
           std::vector<usageRecord> &usages = resourceUseMap[maps.first];
           if (isCritical(caller)) {
@@ -147,19 +153,64 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
       Value *RHS = ci->getOperand(1);
       if (isa<Instruction>(LHS)) {
         auto i = dyn_cast<Instruction>(LHS);
-        if (isShared(i,loop))
+        if (isa<CallInst>(i)) {
+          auto callInst = dyn_cast<CallInst>(i);
+          Function* fun = callInst->getCalledFunction();
+          if(fun) {
+            for (BasicBlock &BB: *fun) {
+              for (Instruction &I: BB) {
+                if (isa<ReturnInst>(I)) {
+                  auto retI = dyn_cast<ReturnInst>(&I);
+                  if (isShared(dyn_cast<Instruction>(retI->getReturnValue()), NULL))
+                    return true;
+                }
+              }
+            }
+          }
+        } else if (isShared(i,loop)) {
           return true;
+        }
       }
 
       if (isa<Instruction>(RHS)) {
-        auto i = dyn_cast<Instruction>(LHS);
-        if (isShared(i,loop))
+        auto i = dyn_cast<Instruction>(RHS);
+        if (isa<CallInst>(i)) {
+          auto callInst = dyn_cast<CallInst>(i);
+          Function* fun = callInst->getCalledFunction();
+          if(fun) {
+            for (BasicBlock &BB: *fun) {
+              for (Instruction &I: BB) {
+                if (isa<ReturnInst>(I)) {
+                  auto retI = dyn_cast<ReturnInst>(&I);
+                  if (isShared(dyn_cast<Instruction>(retI->getReturnValue()), NULL))
+                    return true;
+                }
+              }
+            }
+          }
+        } else if (isShared(i,loop))
           return true;
       }
     } else if (isa<TruncInst>(val)) {
-      auto *truncInst = dyn_cast<TruncInst>(inst);
+      auto truncInst = dyn_cast<TruncInst>(inst);
       if (isShared(dyn_cast<Instruction>(truncInst->getOperand(0)),loop))
         return true;
+    } else if (isa<CallInst>(val)) {
+      auto callInst = dyn_cast<CallInst>(inst);
+      Function* fun = callInst->getCalledFunction();
+      if(fun) {
+        for (BasicBlock &BB : *fun) {
+          for (Instruction &I : BB) {
+            if (isa<ReturnInst>(I)) {
+              auto retI = dyn_cast<ReturnInst>(&I);
+//              errs() << "ret ins " << *retI->getReturnValue() << "\n";
+              if (isShared(dyn_cast<Instruction>(retI->getReturnValue()), NULL))
+                return true;
+            }
+          }
+        }
+      }
+      return false;
     }
   }
   return false;
@@ -175,10 +226,10 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
   LI->analyze(DT);
   if (Loop* loop = getLoop(*LI, i)) {
     if(!loop->getExitingBlock()) {
-//      errs() << "no loop " << f->getName() << "; inst " << *i <<  "\n";
+//      errs() << "no loop " << f->getName() << "; exit block " << *loop->getExitBlocks() <<  "\n";
       return false;
     }
-    errs() << "with loop " << f->getName() << "; inst " << *i <<  "\n";
+//    errs() << "with loop " << f->getName() << "; inst " << *i <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
       auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
@@ -193,22 +244,6 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
 bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
   std::vector<Value *> variables, visitedVariable;
   variables.push_back(inst);
-//  errs() << "inst " << *inst << "\n";
-  if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
-    if (!isa<GlobalValue>(storeInst->getValueOperand())) {
-      variables.push_back(storeInst->getValueOperand());
-    } else {
-      return true;
-    }
-  }
-
-  if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
-    if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
-      variables.push_back(loadInst->getPointerOperand());
-    } else {
-      return true;
-    }
-  }
 
   while (!variables.empty()) {
     Value *v = variables.back();
@@ -220,23 +255,24 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 //    errs() << "val " << *v << "\n";
     if(isa<Instruction>(v)) {
       auto i =  dyn_cast<Instruction>(v);
-      if (loop->contains(i)) {
+      if (!loop || loop->contains(i)) {
         if (auto *storeInst = dyn_cast<StoreInst>(i)) {
-          if (!isa<GlobalValue>(storeInst->getValueOperand())) {
-              if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
-                variables.push_back(storeInst->getValueOperand());
-          } else {
+          if (isa<GlobalValue>(storeInst->getValueOperand())) {
             return true;
+          } else {
+            if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+              variables.push_back(storeInst->getValueOperand());
+
           }
         }
 
         if (auto *loadInst = dyn_cast<LoadInst>(i)) {
-         if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
-             if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
-               variables.push_back(loadInst->getPointerOperand());
-             }
+         if (isa<GlobalValue>(loadInst->getPointerOperand())) {
+           return true;
           } else {
-            return true;
+           if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
+             variables.push_back(loadInst->getPointerOperand());
+           }
           }
         }
 
@@ -250,6 +286,27 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
             return true;
           }
         }
+
+        if(isa<ZExtInst>(i)) {
+          auto *zexI = dyn_cast<ZExtInst>(i);
+          if (!isa<GlobalValue>(zexI->getOperand(0))) {
+            if(std::find(visitedVariable.begin(), visitedVariable.end(), zexI->getOperand(0))== visitedVariable.end()) {
+              variables.push_back(zexI->getOperand(0));
+            }
+          } else {
+            return true;
+          }
+        }
+
+        if( auto truncInst = dyn_cast<TruncInst>(i)) {
+          if (isa<GlobalValue>(truncInst->getOperand(0))) {
+            return true;
+          } else {
+            if(std::find(visitedVariable.begin(), visitedVariable.end(), truncInst->getOperand(0))== visitedVariable.end()) {
+              variables.push_back(truncInst->getOperand(0));
+            }
+          }
+        }
       }
     }
 
@@ -257,7 +314,7 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 //      errs() << "use " << *U << "\n";
       if(isa<Instruction>(U)) {
         auto i =  dyn_cast<Instruction>(U);
-        if (loop->contains(i)) {
+        if (!loop || loop->contains(i)) {
           if (auto *storeInst = dyn_cast<StoreInst>(i)) {
             if (storeInst->getValueOperand() == v)
               continue;
@@ -266,11 +323,11 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
               return true;
             }
 
-            if (!isa<GlobalValue>(storeInst->getValueOperand())) {
+            if (isa<GlobalValue>(storeInst->getValueOperand())) {
+              return true;
+            } else {
               if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
                 variables.push_back(storeInst->getValueOperand());
-            } else {
-              return true;
             }
           }
 
@@ -278,12 +335,12 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
             if (loadInst->getPointerOperand() == v)
               continue;
 
-            if (!isa<GlobalValue>(loadInst->getPointerOperand())) {
+            if (isa<GlobalValue>(loadInst->getPointerOperand())) {
+              return true;
+            } else {
               if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
                 variables.push_back(loadInst->getPointerOperand());
               }
-            } else {
-              return true;
             }
           }
         }
@@ -293,8 +350,6 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
               variables.push_back(ai);
         }
       }
-
-
     }
   }
   return false;
@@ -436,7 +491,6 @@ Function *pSandboxAnalysisPass::getFunctionWithName(std::string name, Module &M)
 }
 
 void pSandboxAnalysisPass::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<llvm::CallGraphWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<llvm::LoopInfoWrapperPass>();
 }

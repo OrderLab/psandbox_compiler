@@ -29,6 +29,9 @@ typedef struct pairInfo {
 static PairInfo targetFunctions[] = {
 //    {{"semop",1,-1,1,1},{"semop",0,0,0,1}},
 //    {{"pthread_mutex_lock",0,0,0,0},{"pthread_mutex_unlock",0,0,0,0}},
+//    {{"pthread_cond_wait",0,0,0,0},{"pthread_cond_wait",0,0,0,0}},
+//    {{"pthread_yield",0,0,0,0},{"pthread_yield",0,0,0,0}},
+//    {{"pthread_sleep",0,0,0,0},{"pthread_sleep",0,0,0,0}},
 {{"pg_usleep",0,0,0,0},{"pg_usleep",0,0,0,0}}
 };
 
