@@ -18,8 +18,8 @@ class FuncNode {
   std::vector<CallRecord> _calls;
   std::vector<CallRecord> _callers;
 
-  bool _contains(const FuncNode *x, const std::vector<CallRecord> &C) const {
-    return std::any_of(C.begin(), C.end(),[x](const CallRecord& s) { return s.second == x; });
+  bool _contains(const CallRecord *x, const std::vector<CallRecord> &C) const {
+    return std::any_of(C.begin(), C.end(),[x](const CallRecord& s) { return s.second == x->second && s.first == x->first; });
   }
 
  public:
@@ -29,18 +29,23 @@ class FuncNode {
 
   FuncNode(FuncNode &&) = default;
 
-  bool calls(const FuncNode *x) const { return _contains(x, _calls); }
-  bool isCalledBy(FuncNode *x) const { return _contains(x, _callers); }
+  bool calls(const CallRecord *x) const { return _contains(x, _calls); }
+  bool isCalledBy(CallRecord *x) const { return _contains(x, _callers); }
 
   unsigned getID() const { return _id; }
   unsigned getSCCId() const { return _scc_id; }
   void setSCCId(unsigned id) { _scc_id = id; }
 
   bool addCall(CallSite CS, FuncNode *x) {
-    if (calls(x))
+    CallRecord cr ;
+    cr.first = CS.getInstruction();
+    cr.second = x;
+    if (calls(&cr))
       return false;
     _calls.emplace_back(CS.getInstruction(),x);
-    if (!x->isCalledBy(this))
+    cr.first = CS.getInstruction();
+    cr.second = this;
+    if (!x->isCalledBy(&cr))
       x->_callers.emplace_back(CS.getInstruction(),this);
     return true;
   }

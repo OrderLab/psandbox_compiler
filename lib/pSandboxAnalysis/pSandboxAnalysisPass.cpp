@@ -50,14 +50,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
       errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
       errs() << "resourceUseMap size " << callers.second.size() << "\n";
       for(auto record: callers.second) {
-        if(record.second->getName() == "ProcSleep") {
-          errs() << " function " << record.second->getName() << "; point 7" <<"\n";
-        } else if (record.second->getName() == "LWLockAcquire") {
           errs() << " function " << record.second->getName()<< "; point 4" << "\n";
-        } else {
-          errs() << " function " << record.second->getName()<< "\n";
-        }
-
       }
       errs() << "---------------------\n";
     }
@@ -104,9 +97,9 @@ void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int dep
       for (auto wrappers: maps.second) {
         FuncNode *node = CG->createNode(wrappers);
         auto Callers = node->getCallers();
-//        errs() << "node " << node->getValue()->getName() << "\n";
         for (auto caller: Callers) {
           std::vector<usageRecord> &usages = resourceUseMap[maps.first];
+
           if (isCritical(caller)) {
             std::pair<Instruction *, Function *> record;
             record.first = dyn_cast<Instruction>(caller.first);
@@ -136,7 +129,6 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
         else if (!Callee->isIntrinsic()) {
           node->addCall(CS,CG->createNode(Callee));
         }
-
       }
     }
   }
@@ -144,7 +136,12 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
 
 
 bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
-  Value *val = bi->getCondition();
+  Value *val;
+
+  if (bi->isConditional())
+    val = bi->getCondition();
+  else
+   return false;
 //  errs() << "condi " << *val << "\n";
   if (auto *inst = dyn_cast<Instruction>(val)) {
     if (isa<CmpInst>(val)) {
@@ -224,17 +221,35 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
   LoopInfo *LI = new LoopInfo();
   LI->releaseMemory();
   LI->analyze(DT);
+
   if (Loop* loop = getLoop(*LI, i)) {
     if(!loop->getExitingBlock()) {
-//      errs() << "no loop " << f->getName() << "; exit block " << *loop->getExitBlocks() <<  "\n";
-      return false;
+      SmallVector<BasicBlock *, 16> exitBlocks;
+      bool is_shared=true;
+      loop->getExitingBlocks(exitBlocks);
+//      errs() << "no loop " << f->getName() << "; exit block " << exitBlocks.size() <<"\n";
+      for(auto EB: exitBlocks) {
+//        errs() << "fun " << f->getName() << "\nbi " << *EB << "\n";
+        for (BasicBlock::iterator inst = EB->begin(); inst != EB->end(); inst++) {
+          auto *bi = dyn_cast<BranchInst>(inst);
+          if(!bi)
+            continue;
+          is_shared = is_shared && isConditionGlobal(bi,loop);
+        }
+      }
+      if (is_shared)
+        return true;
+      else
+        return false;
     }
-//    errs() << "with loop " << f->getName() << "; inst " << *i <<  "\n";
+
+    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
       auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
         continue;
-//      errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
+      if(f->getName() == "RequestCheckpoint")
+          errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
       return isConditionGlobal(bi,loop);
     }
   }
@@ -306,6 +321,7 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
               variables.push_back(truncInst->getOperand(0));
             }
           }
+
         }
       }
     }
