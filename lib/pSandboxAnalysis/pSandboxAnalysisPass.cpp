@@ -78,7 +78,35 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
 //        usages.emplace_back(record);
 //      } else
         if (isWrapper(caller,targetFun.start_fun)) {
-        functionWrapperMap[f].emplace_back(caller.second->getValue());
+          int flag = 1;
+
+          if(targetFun.start_fun.name != targetFun.end_fun.name) {
+            for (BasicBlock &BB : *caller.second->getValue())
+              for (Instruction &I : BB) {
+                if (auto CS = CallSite(&I)) {
+                  Function *Callee = CS.getCalledFunction();
+
+                  if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
+                    if (CallInst *call = dyn_cast<CallInst>(&I)) {
+                      //this adds the void bitcasted functions
+
+                      Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
+                      if(Callee && Callee->getName() == targetFun.end_fun.name)
+                        continue;
+                    }
+                  }
+                  else  if (!Callee->isIntrinsic()) {
+
+                    if (Callee->getName() == targetFun.end_fun.name) {
+                      flag = 0;
+                    }
+                  }
+                }
+              }
+          }
+
+        if(flag)
+          functionWrapperMap[f].emplace_back(caller.second->getValue());
       }
     }
   }
@@ -142,7 +170,7 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
     val = bi->getCondition();
   else
    return false;
-//  errs() << "condi " << *val << "\n";
+
   if (auto *inst = dyn_cast<Instruction>(val)) {
     if (isa<CmpInst>(val)) {
       CmpInst *ci = dyn_cast<CmpInst>(inst);
@@ -150,6 +178,7 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
       Value *RHS = ci->getOperand(1);
       if (isa<Instruction>(LHS)) {
         auto i = dyn_cast<Instruction>(LHS);
+
         if (isa<CallInst>(i)) {
           auto callInst = dyn_cast<CallInst>(i);
           Function* fun = callInst->getCalledFunction();
@@ -243,13 +272,13 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
         return false;
     }
 
-    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
+//    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
       auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
         continue;
-      if(f->getName() == "RequestCheckpoint")
-          errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
+
+//      errs() << "fun " << f->getName() << "\nbi " << *bi << "\n";
       return isConditionGlobal(bi,loop);
     }
   }
@@ -267,71 +296,79 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 
     if(isa<Constant>(v))
       continue;
-//    errs() << "val " << *v << "\n";
+
     if(isa<Instruction>(v)) {
       auto i =  dyn_cast<Instruction>(v);
-      if (!loop || loop->contains(i)) {
-        if (auto *storeInst = dyn_cast<StoreInst>(i)) {
-          if (isa<GlobalValue>(storeInst->getValueOperand())) {
-            return true;
-          } else {
-            if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
-              variables.push_back(storeInst->getValueOperand());
 
-          }
+      if (auto *storeInst = dyn_cast<StoreInst>(i)) {
+        bool is_pont = storeInst->getValueOperand()->getType()->isPointerTy();
+        if (!is_pont && loop && !loop->contains(i))
+          continue;
+        if (isa<GlobalValue>(storeInst->getValueOperand())) {
+          return true;
+        } else {
+          if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+            variables.push_back(storeInst->getValueOperand());
+
         }
+      }
 
-        if (auto *loadInst = dyn_cast<LoadInst>(i)) {
-         if (isa<GlobalValue>(loadInst->getPointerOperand())) {
-           return true;
-          } else {
-           if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
-             variables.push_back(loadInst->getPointerOperand());
-           }
-          }
+      if (auto *loadInst = dyn_cast<LoadInst>(i)) {
+       if (isa<GlobalValue>(loadInst->getPointerOperand())) {
+         return true;
+        } else {
+         if(std::find(visitedVariable.begin(), visitedVariable.end(), loadInst->getPointerOperand())== visitedVariable.end()) {
+           variables.push_back(loadInst->getPointerOperand());
+         }
         }
+      }
 
-        if (isa<GetElementPtrInst>(i)) {
-          auto *getElementPtrInst = dyn_cast<GetElementPtrInst>(i);
-          if (!isa<GlobalValue>(getElementPtrInst->getPointerOperand())) {
-            if(std::find(visitedVariable.begin(), visitedVariable.end(), getElementPtrInst->getPointerOperand())== visitedVariable.end()) {
-              variables.push_back(getElementPtrInst->getPointerOperand());
-            }
-          } else {
-            return true;
+      if (isa<GetElementPtrInst>(i)) {
+        auto *getElementPtrInst = dyn_cast<GetElementPtrInst>(i);
+        if (!isa<GlobalValue>(getElementPtrInst->getPointerOperand())) {
+          if(std::find(visitedVariable.begin(), visitedVariable.end(), getElementPtrInst->getPointerOperand())== visitedVariable.end()) {
+            variables.push_back(getElementPtrInst->getPointerOperand());
           }
+        } else {
+          return true;
         }
+      }
 
-        if(isa<ZExtInst>(i)) {
-          auto *zexI = dyn_cast<ZExtInst>(i);
-          if (!isa<GlobalValue>(zexI->getOperand(0))) {
-            if(std::find(visitedVariable.begin(), visitedVariable.end(), zexI->getOperand(0))== visitedVariable.end()) {
-              variables.push_back(zexI->getOperand(0));
-            }
-          } else {
-            return true;
+      if(isa<ZExtInst>(i)) {
+        auto *zexI = dyn_cast<ZExtInst>(i);
+        if (!isa<GlobalValue>(zexI->getOperand(0))) {
+          if(std::find(visitedVariable.begin(), visitedVariable.end(), zexI->getOperand(0))== visitedVariable.end()) {
+            variables.push_back(zexI->getOperand(0));
           }
+        } else {
+          return true;
         }
+      }
 
-        if( auto truncInst = dyn_cast<TruncInst>(i)) {
-          if (isa<GlobalValue>(truncInst->getOperand(0))) {
-            return true;
-          } else {
-            if(std::find(visitedVariable.begin(), visitedVariable.end(), truncInst->getOperand(0))== visitedVariable.end()) {
-              variables.push_back(truncInst->getOperand(0));
-            }
+      if( auto truncInst = dyn_cast<TruncInst>(i)) {
+        if (isa<GlobalValue>(truncInst->getOperand(0))) {
+          return true;
+        } else {
+          if(std::find(visitedVariable.begin(), visitedVariable.end(), truncInst->getOperand(0))== visitedVariable.end()) {
+            variables.push_back(truncInst->getOperand(0));
           }
-
         }
       }
     }
 
     for (User *U : v->users()) {
-//      errs() << "use " << *U << "\n";
+
       if(isa<Instruction>(U)) {
         auto i =  dyn_cast<Instruction>(U);
+
+
         if (!loop || loop->contains(i)) {
           if (auto *storeInst = dyn_cast<StoreInst>(i)) {
+//            bool is_pont = storeInst->getValueOperand()->getType()->isPointerTy();
+//
+//            if (!is_pont && loop && !loop->contains(i))
+//              continue;
+
             if (storeInst->getValueOperand() == v)
               continue;
 
@@ -444,7 +481,7 @@ bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls, FuncInfo funcIn
     return false;
 
   f = bi->getFunction();
-  if (!funcInfo.argument || !compareValue(bi,funcInfo))
+  if (funcInfo.isargument && !compareValue(bi, funcInfo))
       return false;
 
 

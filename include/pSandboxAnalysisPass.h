@@ -15,7 +15,7 @@ using namespace llvm;
 
 typedef struct functionInfo {
   std::string name;
-  int argument;
+  int isargument;
   int64_t value;
   int isstruct;
   int index;
@@ -32,7 +32,8 @@ static PairInfo targetFunctions[] = {
     {{"pthread_cond_wait",0,0,0,0},{"pthread_cond_wait",0,0,0,0}},
     {{"pthread_yield",0,0,0,0},{"pthread_yield",0,0,0,0}},
     {{"pthread_sleep",0,0,0,0},{"pthread_sleep",0,0,0,0}},
-{{"pg_usleep",0,0,0,0},{"pg_usleep",0,0,0,0}}
+    {{"pg_usleep",0,0,0,0},{"pg_usleep",0,0,0,0}},
+    {{"VTIM_sleep",0,0,0,0}, {"VTIM_sleep",0,0,0,0}}
 };
 
 
