@@ -53,13 +53,13 @@ struct pSandboxAnalysisPass : public ModulePass {
   bool isShared(Instruction* inst, Loop *loop);
   void buildCallgraph(Module &M, GenericCallGraph *CG);
   void addToCallGraph(Function *F, GenericCallGraph *CG);
-  void buildInstrumentationMap(GenericCallGraph *CG, int depth);
+  void buildInstrumentationMap(Module &M,GenericCallGraph *CG, int depth);
   void buildWrapper(Module &M, GenericCallGraph *CG);
  public:
   pSandboxAnalysisPass() : ModulePass(ID) {}
   std::map<Function*, std::vector<usageRecord>> resourceUseMap;
-  std::map<Function*, std::vector<Function*>> functionWrapperMap;
-
+  std::map<Function*, std::vector<Function*>> startFunctionWrapperMap;
+  std::map<Function*, std::vector<Function*>> endFunctionWrapperMap;
 };
 
 #endif //STATIC_ANALYZER_INCLUDE_PSANDBOXANALYSISPASS_H_

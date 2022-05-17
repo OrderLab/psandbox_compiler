@@ -34,7 +34,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
   buildCallgraph(M,&CG);
   buildWrapper(M, &CG);
 
-  for (auto maps: functionWrapperMap) {
+  for (auto maps: startFunctionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
     if (node) {
       errs() << "the Function is " << node->getValue()->getName() << "\n";
@@ -44,7 +44,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
     }
   }
 
-  buildInstrumentationMap(&CG,DEPTH);
+  buildInstrumentationMap(M,&CG,DEPTH);
   errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
     for (auto callers : resourceUseMap) {
       errs() << "resourceUseMap the key function: "<< callers.first->getName() << "\n";
@@ -59,28 +59,36 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
 
 void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
   for (auto targetFun :targetFunctions) {
-
-    Function *f = getFunctionWithName(targetFun.start_fun.name, M);
-    if(!f)
+    Function *start_f,*end_f;
+    start_f = getFunctionWithName(targetFun.start_fun.name, M);
+    end_f = getFunctionWithName(targetFun.end_fun.name, M);
+    if(!start_f)
       continue;
-    resourceUseMap[f];
-    functionWrapperMap[f];
-    FuncNode *node = CG->createNode(f);
+
+    // handle the end function first
+    if(start_f != end_f) {
+      resourceUseMap[end_f];
+      endFunctionWrapperMap[end_f];
+      FuncNode *node = CG->createNode(end_f);
+      auto Callers = node->getCallers();
+      endFunctionWrapperMap[end_f].emplace_back(end_f);
+      for (auto caller: Callers) {
+        if (isWrapper(caller, targetFun.start_fun)) {
+          endFunctionWrapperMap[end_f].emplace_back(caller.second->getValue());
+        }
+      }
+    }
+
+    resourceUseMap[start_f];
+    startFunctionWrapperMap[start_f];
+    FuncNode *node = CG->createNode(start_f);
     auto Callers = node->getCallers();
-    functionWrapperMap[f].emplace_back(f);
+    startFunctionWrapperMap[start_f].emplace_back(start_f);
     for (auto caller: Callers) {
-//      errs() << "caller " << caller.second->getValue()->getName() << "\n";
-//      std::vector<usageRecord> &usages = resourceUseMap[f];
-//      if (isCritical(caller)) {
-//        std::pair<Instruction *, Function *> record;
-//        record.first = dyn_cast<Instruction>(caller.first);
-//        record.second = caller.second->getValue();
-//        usages.emplace_back(record);
-//      } else
         if (isWrapper(caller,targetFun.start_fun)) {
           int flag = 1;
 
-          if(targetFun.start_fun.name != targetFun.end_fun.name) {
+          if(start_f != end_f) {
             for (BasicBlock &BB : *caller.second->getValue())
               for (Instruction &I : BB) {
                 if (auto CS = CallSite(&I)) {
@@ -91,14 +99,22 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
                       //this adds the void bitcasted functions
 
                       Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
-                      if(Callee && Callee->getName() == targetFun.end_fun.name)
-                        continue;
+                      if(Callee) {
+                        auto end_wrappers = endFunctionWrapperMap[end_f];
+                        for (auto wrapper :end_wrappers) {
+                          if(Callee->getName() == wrapper->getName())
+                            flag = 0;
+                        }
+                      }
+
+
                     }
                   }
                   else  if (!Callee->isIntrinsic()) {
-
-                    if (Callee->getName() == targetFun.end_fun.name) {
-                      flag = 0;
+                    auto end_wrappers = endFunctionWrapperMap[end_f];
+                    for (auto wrapper :end_wrappers) {
+                      if(Callee->getName() == wrapper->getName())
+                        flag = 0;
                     }
                   }
                 }
@@ -106,7 +122,7 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
           }
 
         if(flag)
-          functionWrapperMap[f].emplace_back(caller.second->getValue());
+          startFunctionWrapperMap[start_f].emplace_back(caller.second->getValue());
       }
     }
   }
@@ -118,8 +134,8 @@ void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph *CG) {
   }
 }
 
-void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int depth) {
-  std::map<Function*, std::vector<Function*>> wrapper = functionWrapperMap;
+void pSandboxAnalysisPass::buildInstrumentationMap(Module &M, GenericCallGraph *CG, int depth) {
+  std::map<Function*, std::vector<Function*>> wrapper = startFunctionWrapperMap;
  //TODO: check the caller of the caller
     for (auto maps: wrapper) {
       for (auto wrappers: maps.second) {
@@ -127,12 +143,60 @@ void pSandboxAnalysisPass::buildInstrumentationMap(GenericCallGraph *CG, int dep
         auto Callers = node->getCallers();
         for (auto caller: Callers) {
           std::vector<usageRecord> &usages = resourceUseMap[maps.first];
-
+//          errs() << "wrapper " << wrappers->getName() << "\n";
           if (isCritical(caller)) {
-            std::pair<Instruction *, Function *> record;
-            record.first = dyn_cast<Instruction>(caller.first);
-            record.second = caller.second->getValue();
-            usages.emplace_back(record);
+            int flag = 1;
+            Function *start_f,*end_f;
+            start_f = maps.first;
+
+            for (auto target_fun : targetFunctions) {
+              if(target_fun.start_fun.name == start_f->getName()) {
+                end_f = getFunctionWithName(target_fun.end_fun.name, M);
+                break;
+              }
+
+            }
+
+            if(start_f != end_f) {
+              for (BasicBlock &BB : *caller.second->getValue())
+                for (Instruction &I : BB) {
+                  if (auto CS = CallSite(&I)) {
+                    Function *Callee = CS.getCalledFunction();
+
+                    if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
+                      if (CallInst *call = dyn_cast<CallInst>(&I)) {
+                        //this adds the void bitcasted functions
+
+                        Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
+                        if(Callee) {
+                          auto end_wrappers = endFunctionWrapperMap[end_f];
+                          for (auto wrapper :end_wrappers) {
+                            if(Callee->getName() == wrapper->getName()) {
+                              flag = 0;
+                              break;
+                            }
+                          }
+                        }
+                      }
+                    } else  if (!Callee->isIntrinsic()) {
+                      auto end_wrappers = endFunctionWrapperMap[end_f];
+                      for (auto wrapper :end_wrappers) {
+                        if(Callee->getName() == wrapper->getName()) {
+                          flag = 0;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+            }
+
+            if(flag) {
+              std::pair<Instruction *, Function *> record;
+              record.first = dyn_cast<Instruction>(caller.first);
+              record.second = caller.second->getValue();
+              usages.emplace_back(record);
+            }
           }
         }
     }
@@ -170,7 +234,8 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
     val = bi->getCondition();
   else
    return false;
-
+  if(bi->getFunction()->getName() == "VBO_waitstate")
+    errs() << "condi " << *val << "\n";
   if (auto *inst = dyn_cast<Instruction>(val)) {
     if (isa<CmpInst>(val)) {
       CmpInst *ci = dyn_cast<CmpInst>(inst);
@@ -274,7 +339,7 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
         return false;
     }
 
-//    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
+    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
       auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
@@ -295,9 +360,12 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
     Value *v = variables.back();
     visitedVariable.push_back(v);
     variables.pop_back();
-
+    if(inst->getFunction()->getName() == "VBO_waitstate")
+      errs() << "value " << *v << "\n";
     if(isa<Constant>(v))
       continue;
+
+
 
     if(isa<Instruction>(v)) {
       auto i =  dyn_cast<Instruction>(v);
@@ -308,7 +376,7 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
           continue;
         if (isa<GlobalValue>(storeInst->getValueOperand())) {
           return true;
-        } else {
+        }  else {
           if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
             variables.push_back(storeInst->getValueOperand());
 
@@ -356,10 +424,14 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
           }
         }
       }
+    } else {
+      // TODO: check one level
+     return true;
     }
 
     for (User *U : v->users()) {
-
+      if(inst->getFunction()->getName() == "VBO_waitstate")
+        errs() << "use " << *U << "\n";
       if(isa<Instruction>(U)) {
         auto i =  dyn_cast<Instruction>(U);
         if (auto *storeInst = dyn_cast<StoreInst>(i)) {
@@ -478,6 +550,7 @@ bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
 bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls, FuncInfo funcInfo) {
   Instruction *bi = dyn_cast<Instruction>(calls.first);
   Function* f;
+  std::vector<BasicBlock *> succBlocks, visitedBlocks;
 
   if(!bi)
     return false;
@@ -487,9 +560,10 @@ bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls, FuncInfo funcIn
       return false;
 
 
-  DominatorTree DT = DominatorTree();
+  PostDominatorTree DT = PostDominatorTree();
   DT.recalculate(*f);
-  return DT.dominates(f->getEntryBlock().getFirstNonPHI(),bi->getParent());
+
+  return DT.dominates(bi->getParent(),f->getEntryBlock().getFirstNonPHI()->getParent());
 }
 
 bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls) {
