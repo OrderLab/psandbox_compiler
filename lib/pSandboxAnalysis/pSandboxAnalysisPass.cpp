@@ -257,6 +257,8 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
       bool is_shared=true;
       loop->getExitingBlocks(exitBlocks);
 //      errs() << "no loop " << f->getName() << "; exit block " << exitBlocks.size() <<"\n";
+      if (!exitBlocks.size())
+        return false;
       for(auto EB: exitBlocks) {
 //        errs() << "fun " << f->getName() << "\nbi " << *EB << "\n";
         for (BasicBlock::iterator inst = EB->begin(); inst != EB->end(); inst++) {
@@ -360,29 +362,29 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 
       if(isa<Instruction>(U)) {
         auto i =  dyn_cast<Instruction>(U);
+        if (auto *storeInst = dyn_cast<StoreInst>(i)) {
+            bool is_pont = storeInst->getValueOperand()->getType()->isPointerTy();
 
-
-        if (!loop || loop->contains(i)) {
-          if (auto *storeInst = dyn_cast<StoreInst>(i)) {
-//            bool is_pont = storeInst->getValueOperand()->getType()->isPointerTy();
-//
-//            if (!is_pont && loop && !loop->contains(i))
-//              continue;
-
-            if (storeInst->getValueOperand() == v)
+            if (!is_pont && loop && !loop->contains(i))
               continue;
 
-            if(isa<ConstantInt>(storeInst->getValueOperand())) {
-              return true;
-            }
+          if (storeInst->getValueOperand() == v)
+            continue;
 
-            if (isa<GlobalValue>(storeInst->getValueOperand())) {
-              return true;
-            } else {
-              if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
-                variables.push_back(storeInst->getValueOperand());
-            }
+          if(isa<ConstantInt>(storeInst->getValueOperand())) {
+            return true;
           }
+
+          if (isa<GlobalValue>(storeInst->getValueOperand())) {
+            return true;
+          } else {
+            if (std::find(visitedVariable.begin(), visitedVariable.end(), storeInst->getValueOperand())== visitedVariable.end())
+              variables.push_back(storeInst->getValueOperand());
+          }
+        }
+
+        if (!loop || loop->contains(i)) {
+
 
           if (auto *loadInst = dyn_cast<LoadInst>(i)) {
             if (loadInst->getPointerOperand() == v)
