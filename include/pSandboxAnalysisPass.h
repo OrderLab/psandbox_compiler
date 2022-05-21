@@ -60,6 +60,7 @@ struct pSandboxAnalysisPass : public ModulePass {
   std::map<Function*, std::vector<usageRecord>> resourceUseMap;
   std::map<Function*, std::vector<Function*>> startFunctionWrapperMap;
   std::map<Function*, std::vector<Function*>> endFunctionWrapperMap;
+  std::map<Function*, std::vector<Function*>> filterWrapperMap;
 };
 
 #endif //STATIC_ANALYZER_INCLUDE_PSANDBOXANALYSISPASS_H_

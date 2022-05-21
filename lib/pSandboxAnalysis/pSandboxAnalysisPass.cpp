@@ -44,6 +44,16 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
     }
   }
 
+  for (auto maps: endFunctionWrapperMap) {
+    FuncNode *node = CG.createNode(maps.first);
+    if (node) {
+      errs() << "End Function is " << node->getValue()->getName() << "\n";
+    }
+    for (auto wrapper: maps.second) {
+      errs() << "End wrapper is " << wrapper->getName() << "\n";
+    }
+  }
+
   buildInstrumentationMap(M,&CG,DEPTH);
   errs() << "resourceUseMap size: " << resourceUseMap.size() << "\n";
     for (auto callers : resourceUseMap) {
@@ -115,6 +125,7 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
                     for (auto wrapper :end_wrappers) {
                       if(Callee->getName() == wrapper->getName())
                         flag = 0;
+                      filterWrapperMap[start_f].emplace_back(caller.second->getValue());
                     }
                   }
                 }
@@ -135,70 +146,90 @@ void pSandboxAnalysisPass::buildCallgraph(Module &M, GenericCallGraph *CG) {
 }
 
 void pSandboxAnalysisPass::buildInstrumentationMap(Module &M, GenericCallGraph *CG, int depth) {
-  std::map<Function*, std::vector<Function*>> wrapper = startFunctionWrapperMap;
+  std::map<Function*, std::vector<Function*>> map = startFunctionWrapperMap;
  //TODO: check the caller of the caller
-    for (auto maps: wrapper) {
-      for (auto wrappers: maps.second) {
-        FuncNode *node = CG->createNode(wrappers);
-        auto Callers = node->getCallers();
-        for (auto caller: Callers) {
-          std::vector<usageRecord> &usages = resourceUseMap[maps.first];
-//          errs() << "wrapper " << wrappers->getName() << "\n";
-          if (isCritical(caller)) {
-            int flag = 1;
-            Function *start_f,*end_f;
-            start_f = maps.first;
+    for (auto wrappers: map) {
+      for (auto wrapper: wrappers.second) {
+        std::vector<Function*> nodes;
+        nodes.push_back(wrapper);
+        for (int i = 0; i < depth; i++) {
+          std::vector<Function*> temp;
+          for(auto w: nodes) {
+            FuncNode *node = CG->createNode(w);
+            auto Callers = node->getCallers();
+            for (auto caller: Callers) {
+              std::vector<usageRecord> &usages = resourceUseMap[wrappers.first];
 
-            for (auto target_fun : targetFunctions) {
-              if(target_fun.start_fun.name == start_f->getName()) {
-                end_f = getFunctionWithName(target_fun.end_fun.name, M);
-                break;
-              }
+              if (isCritical(caller)) {
+                int flag = 1;
+                Function *start_f,*end_f;
+                start_f = wrappers.first;
 
-            }
+                for (auto target_fun : targetFunctions) {
+                  if(target_fun.start_fun.name == start_f->getName()) {
+                    end_f = getFunctionWithName(target_fun.end_fun.name, M);
+                    break;
+                  }
+                }
+//                if(caller.second->getValue()->getName() == "VXID_Get")
+//                  errs() << "start " <<start_f->getName() <<"; end " << end_f->getName() << "\n";
+                if(start_f != end_f) {
+                  for (BasicBlock &BB : *caller.second->getValue())
+                    for (Instruction &I : BB) {
+                      if (auto CS = CallSite(&I)) {
+                        Function *Callee = CS.getCalledFunction();
 
-            if(start_f != end_f) {
-              for (BasicBlock &BB : *caller.second->getValue())
-                for (Instruction &I : BB) {
-                  if (auto CS = CallSite(&I)) {
-                    Function *Callee = CS.getCalledFunction();
+                        if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
+                          if (CallInst *call = dyn_cast<CallInst>(&I)) {
+                            //this adds the void bitcasted functions
 
-                    if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
-                      if (CallInst *call = dyn_cast<CallInst>(&I)) {
-                        //this adds the void bitcasted functions
+                            Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
+                            if(Callee) {
+                              auto end_wrappers = endFunctionWrapperMap[end_f];
+                              for (auto end_wrapper :end_wrappers) {
 
-                        Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
-                        if(Callee) {
+                                if(Callee->getName() == end_wrapper->getName()) {
+                                  flag = 0;
+                                  break;
+                                }
+                              }
+                            }
+                          }
+                        } else  if (!Callee->isIntrinsic()) {
                           auto end_wrappers = endFunctionWrapperMap[end_f];
-                          for (auto wrapper :end_wrappers) {
-                            if(Callee->getName() == wrapper->getName()) {
+                          for (auto end_wrapper :end_wrappers) {
+                            if(Callee->getName() == end_wrapper->getName()) {
                               flag = 0;
                               break;
                             }
                           }
                         }
                       }
-                    } else  if (!Callee->isIntrinsic()) {
-                      auto end_wrappers = endFunctionWrapperMap[end_f];
-                      for (auto wrapper :end_wrappers) {
-                        if(Callee->getName() == wrapper->getName()) {
-                          flag = 0;
-                          break;
-                        }
-                      }
                     }
-                  }
                 }
-            }
 
-            if(flag) {
-              std::pair<Instruction *, Function *> record;
-              record.first = dyn_cast<Instruction>(caller.first);
-              record.second = caller.second->getValue();
-              usages.emplace_back(record);
+                if(flag) {
+                  std::pair<Instruction *, Function *> record;
+                  record.first = dyn_cast<Instruction>(caller.first);
+                  record.second = caller.second->getValue();
+                  usages.emplace_back(record);
+                }
+              } else {
+                std::vector<Function *> filerFunctions =  filterWrapperMap[wrappers.first];
+                int is_filter = 0;
+                for(auto filerFunction : filerFunctions ) {
+                    if (filerFunction == caller.second->getValue())
+                      is_filter = 1;
+                }
+                if(!is_filter)
+                  temp.push_back(caller.second->getValue());
+              }
             }
           }
+          nodes.clear();
+          nodes = temp;
         }
+
     }
   }
 }
@@ -234,8 +265,8 @@ bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
     val = bi->getCondition();
   else
    return false;
-  if(bi->getFunction()->getName() == "VBO_waitstate")
-    errs() << "condi " << *val << "\n";
+//  if(bi->getFunction()->getName() == "VXID_Get")
+//    errs() << "condi " << *val << "\n";
   if (auto *inst = dyn_cast<Instruction>(val)) {
     if (isa<CmpInst>(val)) {
       CmpInst *ci = dyn_cast<CmpInst>(inst);
@@ -339,7 +370,7 @@ bool pSandboxAnalysisPass::isCritical(FuncNode::CallRecord calls) {
         return false;
     }
 
-    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
+//    errs() << "with loop " << f->getName() << "; exit block  " << loop->getNumBackEdges() <<  "\n";
     for (BasicBlock::iterator inst = loop->getExitingBlock()->begin(); inst != loop->getExitingBlock()->end(); inst++) {
       auto *bi = dyn_cast<BranchInst>(inst);
       if(!bi)
@@ -360,8 +391,8 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
     Value *v = variables.back();
     visitedVariable.push_back(v);
     variables.pop_back();
-    if(inst->getFunction()->getName() == "VBO_waitstate")
-      errs() << "value " << *v << "\n";
+//    if(inst->getFunction()->getName() == "VXID_Get")
+//      errs() << "value " << *v << "\n";
     if(isa<Constant>(v))
       continue;
 
@@ -426,12 +457,15 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
       }
     } else {
       // TODO: check one level
-     return true;
+//     return true;
+      if (isa<Argument>(v))
+        return true;
+//    }
     }
 
     for (User *U : v->users()) {
-      if(inst->getFunction()->getName() == "VBO_waitstate")
-        errs() << "use " << *U << "\n";
+//      if(inst->getFunction()->getName() == "VXID_Get")
+//        errs() << "use " << *U << "\n";
       if(isa<Instruction>(U)) {
         auto i =  dyn_cast<Instruction>(U);
         if (auto *storeInst = dyn_cast<StoreInst>(i)) {
@@ -456,8 +490,6 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
         }
 
         if (!loop || loop->contains(i)) {
-
-
           if (auto *loadInst = dyn_cast<LoadInst>(i)) {
             if (loadInst->getPointerOperand() == v)
               continue;
@@ -481,6 +513,7 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
   }
   return false;
 }
+
 
 bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
   auto *callInst = dyn_cast<CallInst>(inst);
