@@ -36,17 +36,17 @@ class FuncNode {
   unsigned getSCCId() const { return _scc_id; }
   void setSCCId(unsigned id) { _scc_id = id; }
 
-  bool addCall(CallSite CS, FuncNode *x) {
+  bool addCall(CallBase *CS, FuncNode *x) {
     CallRecord cr ;
-    cr.first = CS.getInstruction();
+    cr.first = CS;
     cr.second = x;
     if (calls(&cr))
       return false;
-    _calls.emplace_back(CS.getInstruction(),x);
-    cr.first = CS.getInstruction();
+    _calls.emplace_back(CS,x);
+    cr.first = CS;
     cr.second = this;
     if (!x->isCalledBy(&cr))
-      x->_callers.emplace_back(CS.getInstruction(),this);
+      x->_callers.emplace_back(CS,this);
     return true;
   }
 
@@ -82,7 +82,7 @@ class FuncNode {
     FuncNode *createNode(Function *a) { return getOrCreate(a); }
 
     // a calls b
-    bool addCall(Function *a, Function *b, CallSite i) {
+    bool addCall(Function *a, Function *b, CallBase *i) {
       auto A = getOrCreate(a);
       auto B = getOrCreate(b);
       return A->addCall(i, B);

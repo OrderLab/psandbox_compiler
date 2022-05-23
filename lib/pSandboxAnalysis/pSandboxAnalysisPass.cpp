@@ -11,9 +11,9 @@
 #include <pSandboxAnalysisPass.h>
 #include "CallGraph.h"
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/InstrTypes.h"
@@ -24,7 +24,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Analysis/PostDominators.h"
-
+#include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
 #define DEPTH 2
@@ -47,7 +47,7 @@ bool pSandboxAnalysisPass::runOnModule(Module &M) {
   for (auto maps: endFunctionWrapperMap) {
     FuncNode *node = CG.createNode(maps.first);
     if (node) {
-      errs() << "End Function is " << node->getValue()->getName() << "\n";
+      errs() << "End Function is " << node->getValue()->getName().data() << "\n";
     }
     for (auto wrapper: maps.second) {
       errs() << "End wrapper is " << wrapper->getName() << "\n";
@@ -101,13 +101,11 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
           if(start_f != end_f) {
             for (BasicBlock &BB : *caller.second->getValue())
               for (Instruction &I : BB) {
-                if (auto CS = CallSite(&I)) {
-                  Function *Callee = CS.getCalledFunction();
-
+                if (auto *CS = dyn_cast<CallBase>(&I)) {
+                  Function *Callee = CS->getCalledFunction();
                   if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
                     if (CallInst *call = dyn_cast<CallInst>(&I)) {
                       //this adds the void bitcasted functions
-
                       Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
                       if(Callee) {
                         auto end_wrappers = endFunctionWrapperMap[end_f];
@@ -123,6 +121,7 @@ void pSandboxAnalysisPass::buildWrapper(Module &M, GenericCallGraph *CG) {
                   else  if (!Callee->isIntrinsic()) {
                     auto end_wrappers = endFunctionWrapperMap[end_f];
                     for (auto wrapper :end_wrappers) {
+                      if(wrapper)
                       if(Callee->getName() == wrapper->getName())
                         flag = 0;
                       filterWrapperMap[start_f].emplace_back(caller.second->getValue());
@@ -158,7 +157,7 @@ void pSandboxAnalysisPass::buildInstrumentationMap(Module &M, GenericCallGraph *
             FuncNode *node = CG->createNode(w);
             auto Callers = node->getCallers();
             for (auto caller: Callers) {
-              std::vector<usageRecord> &usages = resourceUseMap[wrappers.first];
+              std::set<usageRecord> &usages = resourceUseMap[wrappers.first];
 
               if (isCritical(caller)) {
                 int flag = 1;
@@ -212,7 +211,7 @@ void pSandboxAnalysisPass::buildInstrumentationMap(Module &M, GenericCallGraph *
                   std::pair<Instruction *, Function *> record;
                   record.first = dyn_cast<Instruction>(caller.first);
                   record.second = caller.second->getValue();
-                  usages.emplace_back(record);
+                  usages.insert(record);
                 }
               } else {
                 std::vector<Function *> filerFunctions =  filterWrapperMap[wrappers.first];
@@ -240,10 +239,10 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
   // Look for calls by this function.
   for (BasicBlock &BB : *F)
     for (Instruction &I : BB) {
-      if (auto CS = CallSite(&I)) {
-        Function *Callee = CS.getCalledFunction();
+      if (auto *CS = dyn_cast<CallBase>(&I)) {
+        Function *Callee = CS->getCalledFunction();
         if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID())) {
-          if (CallInst *call = dyn_cast<CallInst>(CS.getInstruction())) {
+          if (CallInst *call = dyn_cast<CallInst>(&I)) {
             //this adds the void bitcasted functions
             Callee = llvm::dyn_cast<llvm::Function>(call->getCalledValue()->stripPointerCasts());
             node->addCall(CS,CG->createNode(Callee));
@@ -254,9 +253,7 @@ void pSandboxAnalysisPass::addToCallGraph(Function *F, GenericCallGraph *CG) {
         }
       }
     }
-  }
-
-
+}
 
 bool pSandboxAnalysisPass::isConditionGlobal(BranchInst* bi, Loop *loop) {
   Value *val;
@@ -395,8 +392,6 @@ bool pSandboxAnalysisPass::isShared(Instruction* inst, Loop *loop) {
 //      errs() << "value " << *v << "\n";
     if(isa<Constant>(v))
       continue;
-
-
 
     if(isa<Instruction>(v)) {
       auto i =  dyn_cast<Instruction>(v);
@@ -582,19 +577,20 @@ bool pSandboxAnalysisPass::compareValue(Instruction *inst, FuncInfo funcInfo) {
 
 bool pSandboxAnalysisPass::isWrapper(FuncNode::CallRecord calls, FuncInfo funcInfo) {
   Instruction *bi = dyn_cast<Instruction>(calls.first);
-  Function* f;
+  Function* f, *new_f;
   std::vector<BasicBlock *> succBlocks, visitedBlocks;
-
+  ValueToValueMapTy VMap;
   if(!bi)
     return false;
 
   f = bi->getFunction();
+
+  new_f = CloneFunction(f, VMap);
   if (funcInfo.isargument && !compareValue(bi, funcInfo))
       return false;
 
-
   PostDominatorTree DT = PostDominatorTree();
-  DT.recalculate(*f);
+  DT.recalculate(*new_f);
 
   return DT.dominates(bi->getParent(),f->getEntryBlock().getFirstNonPHI()->getParent());
 }
@@ -655,6 +651,7 @@ Function *pSandboxAnalysisPass::getFunctionWithName(std::string name, Module &M)
 void pSandboxAnalysisPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<llvm::LoopInfoWrapperPass>();
+
 }
 
 char pSandboxAnalysisPass::ID = 1;
